@@ -1,0 +1,31 @@
+{
+  "name": "SmartFuel — Fuel Monitoring & Station Management",
+  "short_name": "SmartFuel",
+  "description": "Real-time fuel tank monitoring, refill and consumption detection, anomaly alerts and reporting.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#080b11",
+  "theme_color": "#0f766e",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    { "name": "Alerts", "url": "/alerts" },
+    { "name": "Fuel movement", "url": "/movements" },
+    { "name": "Reports", "url": "/reports" }
+  ]
+}

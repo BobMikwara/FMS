@@ -1,0 +1,33 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+
+# database
+/prisma/*.db
+/prisma/*.db-journal
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# generated prisma client
+/src/generated
+
+# env
+.env
+.env.local
+.env*.local
+
+# misc
+*.pem
+.DS_Store
+*.tsbuildinfo
+/coverage
+/.arena

@@ -1,0 +1,40 @@
+{
+  "name": "smartfuel-fms",
+  "version": "1.0.0",
+  "private": true,
+  "description": "SmartFuel \u2014 Real-time Fuel Tank Monitoring & Station Management Platform",
+  "scripts": {
+    "dev": "NODE_OPTIONS=--disable-warning=ExperimentalWarning next dev",
+    "build": "next build",
+    "start": "NODE_OPTIONS=--disable-warning=ExperimentalWarning next start",
+    "typecheck": "tsc --noEmit",
+    "db:setup": "node --disable-warning=ExperimentalWarning scripts/setup-db.mjs",
+    "db:seed": "node --disable-warning=ExperimentalWarning scripts/seed.mjs",
+    "db:reset": "node --disable-warning=ExperimentalWarning scripts/setup-db.mjs --reset"
+  },
+  "dependencies": {
+    "bcryptjs": "2.4.3",
+    "clsx": "2.1.1",
+    "date-fns": "4.1.0",
+    "exceljs": "4.4.0",
+    "jose": "6.1.0",
+    "lucide-react": "0.544.0",
+    "next": "15.5.26",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "tailwind-merge": "3.3.1",
+    "zod": "3.24.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.1.11",
+    "@types/bcryptjs": "2.4.6",
+    "@types/node": "22.15.0",
+    "@types/react": "19.1.0",
+    "@types/react-dom": "19.1.0",
+    "tailwindcss": "4.1.11",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=20.11.0"
+  }
+}
