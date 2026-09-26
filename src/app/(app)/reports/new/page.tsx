@@ -12,7 +12,9 @@ export default async function NewReportPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const stations = (await listAllStations(user.organizationId));
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
   const fuelTypes = (await listFuelTypes(user.organizationId));
   const now = new Date().toISOString();
 

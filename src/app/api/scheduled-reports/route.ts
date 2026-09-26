@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("reports.view", async (request, ctx) => {
   try {
-    const rows = (await listScheduledReports(ctx.user.organizationId));
+    const rows = (await listScheduledReports(ctx.user.organizationId, ctx.user.stationIds));
     return jsonOk({ rows, total: rows.length });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -47,9 +47,11 @@ export const POST = withPermission("reports.schedule", async (request, ctx) => {
       if (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(requestedStationId)) {
         throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
       }
+    } else if (ctx.user.stationIds.length > 0) {
+      throw new ApiError(403, "A station must be selected for a scoped scheduled report.", "forbidden");
     }
-  let scheduled!: ScheduledReport;
-  try {
+    let scheduled!: ScheduledReport;
+    try {
       scheduled = (await createScheduledReport({
         organizationId: ctx.user.organizationId,
         name,
@@ -67,9 +69,9 @@ export const POST = withPermission("reports.schedule", async (request, ctx) => {
         filters: (body.filters ?? {}) as Record<string, unknown>,
         isEnabled: body.isEnabled !== false,
       }));
-  } catch (error) {
-    uniqueViolation(error, "A schedule with this name", "name");
-  }
+    } catch (error) {
+      uniqueViolation(error, "A schedule with this name", "name");
+    }
     (await audit({
       user: ctx.user,
       action: "created",

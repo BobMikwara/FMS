@@ -18,8 +18,10 @@ export default async function ScheduledReportsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const scheduled = (await listScheduledReports(user.organizationId));
-  const stations = (await listAllStations(user.organizationId));
+  const scheduled = (await listScheduledReports(user.organizationId, user.stationIds));
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
   const users = (await listUsers(user.organizationId));
 
   const rows = scheduled.map((entry) => ({
@@ -75,6 +77,7 @@ export default async function ScheduledReportsPage() {
           initialRows={rows}
           stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
           recipientOptions={users.map((entry) => entry.email)}
+          allowAllStations={user.stationIds.length === 0}
         />
       )}
 

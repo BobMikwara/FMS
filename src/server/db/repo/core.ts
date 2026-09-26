@@ -349,6 +349,7 @@ export async function getAuditLog(auditId: string): Promise<AuditLog | null> {
 export interface AuditFilter {
   orgId: string;
   userId?: string;
+  userIds?: string[];
   entity?: string;
   action?: string;
   search?: string;
@@ -364,6 +365,11 @@ export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditL
   if (filter.userId) {
     where.push("l.user_id = ?");
     params.push(filter.userId);
+  }
+  if (filter.userIds) {
+    if (filter.userIds.length === 0) return { rows: [], total: 0 };
+    where.push(`l.user_id IN (${filter.userIds.map(() => "?").join(", ")})`);
+    params.push(...filter.userIds);
   }
   if (filter.entity) {
     where.push("l.entity = ?");

@@ -13,6 +13,7 @@ export interface ReportFilter {
   search?: string;
   page?: number;
   pageSize?: number;
+  stationIds?: string[];
 }
 
 export async function listReports(filter: ReportFilter): Promise<{ rows: Report[]; total: number }> {
@@ -31,15 +32,23 @@ export async function listReports(filter: ReportFilter): Promise<{ rows: Report[
     params.push(`%${filter.search}%`);
   }
   const clause = `WHERE ${where.join(" AND ")}`;
-  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM reports r ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(100, Math.max(5, filter.pageSize ?? 20));
+  const needsStationPostFilter = Boolean(filter.stationIds && filter.stationIds.length > 0);
   const rows = (await query<Record<string, unknown>>(
     `SELECT r.*, u.name AS created_by_name FROM reports r JOIN users u ON u.id = r.created_by_id
-     ${clause} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, (page - 1) * pageSize],
-  ));
-  return { rows: rows.map(mapReport), total };
+     ${clause} ORDER BY r.created_at DESC ${needsStationPostFilter ? "" : "LIMIT ? OFFSET ?"}`,
+    needsStationPostFilter ? params : [...params, pageSize, (page - 1) * pageSize],
+  )).map(mapReport).filter((report) => {
+    if (!needsStationPostFilter) return true;
+    const selectedStationId = typeof report.filters.stationId === "string" ? report.filters.stationId : null;
+    return !selectedStationId || filter.stationIds!.includes(selectedStationId);
+  });
+  const total = rows.length;
+  return {
+    rows: needsStationPostFilter ? rows.slice((page - 1) * pageSize, page * pageSize) : rows,
+    total,
+  };
 }
 
 export async function getReport(reportId: string): Promise<Report | null> {
@@ -143,11 +152,13 @@ function mapReport(row: Record<string, unknown>): Report {
 /* Scheduled reports                                                          */
 /* -------------------------------------------------------------------------- */
 
-export async function listScheduledReports(orgId: string): Promise<ScheduledReport[]> {
-  return (await query<Record<string, unknown>>(
+export async function listScheduledReports(orgId: string, stationIds?: string[]): Promise<ScheduledReport[]> {
+  const rows = (await query<Record<string, unknown>>(
     "SELECT * FROM scheduled_reports WHERE organization_id = ? ORDER BY is_enabled DESC, name",
     [orgId],
   )).map(mapScheduled);
+  if (!stationIds || stationIds.length === 0) return rows;
+  return rows.filter((row) => row.stationId != null && stationIds.includes(row.stationId));
 }
 
 export async function getScheduledReport(scheduledId: string): Promise<ScheduledReport | null> {
