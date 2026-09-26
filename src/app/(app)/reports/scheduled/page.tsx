@@ -6,7 +6,6 @@ import { listScheduledReports } from "@/server/db/repo/reports";
 import { listAllStations } from "@/server/db/repo/stations";
 import { listUsers } from "@/server/db/repo/core";
 import { PageHeader, Notice } from "@/components/ui/layout";
-import { EmptyState } from "@/components/ui/feedback";
 import { ScheduledReportsBrowser } from "./scheduled-reports-browser";
 import { REPORT_CATEGORIES } from "@/lib/report-categories";
 
@@ -61,25 +60,12 @@ export default async function ScheduledReportsPage() {
         written to the audit log. If a recipient address bounces, the failure is recorded rather than swallowed.
       </Notice>
 
-      {rows.length === 0 ? (
-        <EmptyState
-          icon="report"
-          title="No scheduled reports yet"
-          description="Set up a daily or weekly report and it will generate and deliver itself without anyone remembering to run it."
-          action={
-            <Link href="/reports/scheduled" className="btn btn-primary btn-sm">
-              Schedule a report
-            </Link>
-          }
-        />
-      ) : (
-        <ScheduledReportsBrowser
-          initialRows={rows}
-          stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
-          recipientOptions={users.map((entry) => entry.email)}
-          allowAllStations={user.stationIds.length === 0}
-        />
-      )}
+      <ScheduledReportsBrowser
+        initialRows={rows}
+        stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
+        recipientOptions={users.map((entry) => entry.email)}
+        allowAllStations={user.stationIds.length === 0}
+      />
 
       <section className="card p-5">
         <h2 className="flex items-center gap-2 text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">
