@@ -80,8 +80,8 @@ const DEFAULT_CONFIG: EngineConfig = {
   reconciliationVariancePct: 0.5,
 };
 
-function loadConfig(orgId: string): EngineConfig {
-  const settings = getSettings(orgId);
+async function loadConfig(orgId: string): Promise<EngineConfig> {
+  const settings = (await getSettings(orgId));
   const stored = (settings.engine ?? {}) as Partial<EngineConfig>;
   return { ...DEFAULT_CONFIG, ...stored };
 }
@@ -241,11 +241,11 @@ export function classifyMovement(args: {
 /* Ingest pipeline                                                            */
 /* -------------------------------------------------------------------------- */
 
-export function ingestReading(options: IngestOptions): IngestResult {
+export async function ingestReading(options: IngestOptions): Promise<IngestResult> {
   const device: Device | null = options.deviceId
-    ? getDevice(options.deviceId)
+    ? (await getDevice(options.deviceId))
     : options.deviceSerial
-      ? getDeviceBySerial(options.deviceSerial)
+      ? (await getDeviceBySerial(options.deviceSerial))
       : null;
 
   if (!device) {
@@ -268,24 +268,24 @@ export function ingestReading(options: IngestOptions): IngestResult {
     };
   }
 
-  const tank = getTank(device.tankId);
+  const tank = (await getTank(device.tankId));
   if (!tank) {
     return { ok: false, rejected: "unassigned_device", message: "Assigned tank no longer exists" };
   }
 
   const validation = validateReading(tank, options.reading);
   if (!validation.valid) {
-    flagInvalidReading(device, tank, validation.reason ?? "Invalid reading");
+    (await flagInvalidReading(device, tank, validation.reason ?? "Invalid reading"));
     return { ok: false, rejected: "invalid_reading", message: validation.reason };
   }
 
-  const station = getStation(tank.stationId);
+  const station = (await getStation(tank.stationId));
   if (!station) {
     return { ok: false, rejected: "unassigned_device", message: "Assigned station no longer exists" };
   }
 
-  const config = loadConfig(tank.organizationId);
-  const previous = latestReadingForTank(tank.id);
+  const config = (await loadConfig(tank.organizationId));
+  const previous = (await latestReadingForTank(tank.id));
   const ts = options.reading.ts ?? nowIso();
 
   const volumeLiters = options.reading.volumeLiters as number;
@@ -297,7 +297,7 @@ export function ingestReading(options: IngestOptions): IngestResult {
     return { ok: false, rejected: "duplicate", message: "Reading timestamp is older than the latest stored reading" };
   }
 
-  const reading = insertReading({
+  const reading = (await insertReading({
     ts,
     organizationId: tank.organizationId,
     tankId: tank.id,
@@ -310,7 +310,7 @@ export function ingestReading(options: IngestOptions): IngestResult {
     signal: options.reading.signal ?? device.signalStrength ?? null,
     batteryPct: options.reading.batteryPct ?? device.batteryPct ?? null,
     raw: options.reading.raw ?? null,
-  });
+  }));
 
   const at = new Date(ts);
   const withinHours = isWithinOperatingHours(station, at);
@@ -330,7 +330,7 @@ export function ingestReading(options: IngestOptions): IngestResult {
     waterLevelMm: options.reading.waterLevelMm ?? tank.waterLevelMm,
     status: tankStatusFromPercent(levelPercent),
   };
-  updateTank(tank.id, tankPatch);
+  (await updateTank(tank.id, tankPatch));
 
   const devicePatch: Record<string, unknown> = {
     status: "online",
@@ -339,13 +339,13 @@ export function ingestReading(options: IngestOptions): IngestResult {
   };
   if (options.reading.signal != null) devicePatch.signalStrength = options.reading.signal;
   if (options.reading.batteryPct != null) devicePatch.batteryPct = options.reading.batteryPct;
-  updateDevice(device.id, devicePatch);
+  (await updateDevice(device.id, devicePatch));
 
   let event: { id: string; type: string; volume: number } | null = null;
   const alerts: Alert[] = [];
 
   if (decision.kind !== "none") {
-    const created = createEvent({
+    const created = (await createEvent({
       ts,
       organizationId: tank.organizationId,
       stationId: tank.stationId,
@@ -359,12 +359,12 @@ export function ingestReading(options: IngestOptions): IngestResult {
       confidence: decision.confidence,
       status: decision.status,
       reason: decision.reason,
-    });
+    }));
     event = { id: created.id, type: created.type, volume: created.volume };
   }
 
   alerts.push(
-    ...evaluateTankAlerts({
+    ...(await evaluateTankAlerts({
       tank,
       device,
       levelPercent,
@@ -374,12 +374,12 @@ export function ingestReading(options: IngestOptions): IngestResult {
       config,
       ts,
       decision,
-    }),
+    })),
   );
 
   if (event && (event.type === "anomaly" || event.type === "refill")) {
     // Refill / anomaly events may themselves warrant a notification.
-    notifyEvent(device, tank, event, levelPercent);
+    (await notifyEvent(device, tank, event, levelPercent));
   }
 
   return { ok: true, reading, event, alerts };
@@ -408,26 +408,26 @@ interface EvaluateArgs {
   decision: MovementDecision;
 }
 
-function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
+async function evaluateTankAlerts(args: EvaluateArgs): Promise<Alert[]> {
   const { tank, device, levelPercent, volumeLiters, temperatureC, waterLevelMm, config, ts, decision } = args;
   const created: Alert[] = [];
 
-  const push = (input: Parameters<typeof createAlert>[0]) => {
-    const alert = createAlert(input);
+  const push = async (input: Parameters<typeof createAlert>[0]) => {
+    const alert = (await createAlert(input));
     created.push(alert);
-    createNotification({
+    (await createNotification({
       organizationId: tank.organizationId,
       alertId: alert.id,
       title: alert.title,
       body: alert.message,
       severity: alert.severity,
-    });
+    }));
     return alert;
   };
 
   // Level alerts -----------------------------------------------------------
   if (levelPercent < tank.criticalThresholdPct) {
-    const existing = activeAlertsForTank(tank.id, "critical_fuel");
+    const existing = (await activeAlertsForTank(tank.id, "critical_fuel"));
     if (existing.length === 0) {
       push({
         organizationId: tank.organizationId,
@@ -445,7 +445,7 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
       });
     }
   } else if (levelPercent < tank.lowThresholdPct) {
-    const existing = activeAlertsForTank(tank.id, "low_fuel");
+    const existing = (await activeAlertsForTank(tank.id, "low_fuel"));
     if (existing.length === 0) {
       push({
         organizationId: tank.organizationId,
@@ -465,9 +465,9 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
   } else {
     // Recovered — auto-resolve stale low/critical alerts.
     for (const type of ["low_fuel", "critical_fuel"]) {
-      for (const alert of activeAlertsForTank(tank.id, type)) {
+      for (const alert of (await activeAlertsForTank(tank.id, type))) {
         if (levelPercent >= tank.lowThresholdPct) {
-          updateAlertResolved(alert.id, "Level recovered above the low threshold");
+          (await updateAlertResolved(alert.id, "Level recovered above the low threshold"));
         }
       }
     }
@@ -475,7 +475,7 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
 
   // Overfill ---------------------------------------------------------------
   if (levelPercent > tank.overfillThresholdPct) {
-    if (activeAlertsForTank(tank.id, "overfill").length === 0) {
+    if ((await activeAlertsForTank(tank.id, "overfill")).length === 0) {
       push({
         organizationId: tank.organizationId,
         stationId: tank.stationId,
@@ -495,7 +495,7 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
 
   // Water ------------------------------------------------------------------
   if (waterLevelMm != null && waterLevelMm >= config.waterAlarmMm) {
-    if (activeAlertsForTank(tank.id, "water_detected").length === 0) {
+    if ((await activeAlertsForTank(tank.id, "water_detected")).length === 0) {
       push({
         organizationId: tank.organizationId,
         stationId: tank.stationId,
@@ -515,7 +515,7 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
 
   // Temperature ------------------------------------------------------------
   if (temperatureC != null && (temperatureC < config.temperatureMinC || temperatureC > config.temperatureMaxC)) {
-    if (activeAlertsForTank(tank.id, "temperature_abnormal").length === 0) {
+    if ((await activeAlertsForTank(tank.id, "temperature_abnormal")).length === 0) {
       push({
         organizationId: tank.organizationId,
         stationId: tank.stationId,
@@ -535,7 +535,7 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
 
   // Suspected fuel loss ----------------------------------------------------
   if (decision.kind === "anomaly" && decision.delta < 0) {
-    if (activeAlertsForTank(tank.id, "suspected_loss").length === 0) {
+    if ((await activeAlertsForTank(tank.id, "suspected_loss")).length === 0) {
       push({
         organizationId: tank.organizationId,
         stationId: tank.stationId,
@@ -562,15 +562,15 @@ function evaluateTankAlerts(args: EvaluateArgs): Alert[] {
   return created;
 }
 
-function updateAlertResolved(alertId: string, note: string): void {
-  execute("UPDATE alerts SET status = 'resolved', resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), resolution_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?", [
+async function updateAlertResolved(alertId: string, note: string): Promise<void> {
+  (await execute("UPDATE alerts SET status = 'resolved', resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), resolution_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?", [
     note,
     alertId,
-  ]);
+  ]));
 }
 
-function flagInvalidReading(device: Device, tank: Tank, reason: string): void {
-  createAlert({
+async function flagInvalidReading(device: Device, tank: Tank, reason: string): Promise<void> {
+  (await createAlert({
     organizationId: tank.organizationId,
     stationId: tank.stationId,
     tankId: tank.id,
@@ -580,34 +580,34 @@ function flagInvalidReading(device: Device, tank: Tank, reason: string): void {
     title: `Invalid reading from ${device.serialNumber}`,
     message: `A reading from ${device.serialNumber} on ${tank.name} was rejected: ${reason}. The reading was not included in reporting.`,
     metadata: { reason, at: nowIso() },
-  });
-  updateDevice(device.id, { status: "fault" });
+  }));
+  (await updateDevice(device.id, { status: "fault" }));
 }
 
-function notifyEvent(
+async function notifyEvent(
   device: Device,
   tank: Tank,
   event: { id: string; type: string; volume: number },
   levelPercent: number,
-): void {
-  const station = getStation(tank.stationId);
+): Promise<void> {
+  const station = (await getStation(tank.stationId));
   const stationName = station?.name ?? "Unknown station";
   if (event.type === "anomaly") {
-    createNotification({
+    (await createNotification({
       organizationId: tank.organizationId,
       title: `Suspected fuel loss — ${tank.name}`,
       body: `${Math.round(event.volume)} L unexplained movement at ${stationName}.`,
       severity: "critical",
-    });
+    }));
     return;
   }
   if (event.type === "refill") {
-    createNotification({
+    (await createNotification({
       organizationId: tank.organizationId,
       title: `Refill detected — ${tank.name}`,
       body: `+${Math.round(event.volume).toLocaleString()} L received at ${stationName}. Tank now ${levelPercent.toFixed(0)}% full.`,
       severity: "info",
-    });
+    }));
   }
 }
 
@@ -619,35 +619,35 @@ function notifyEvent(
  * Marks devices offline when they stop communicating (PRD §66) and restores
  * them automatically when data returns. Records outage duration in metadata.
  */
-export function sweepDeviceHealth(orgId: string): { offline: number; restored: number } {
-  const settings = getSettings(orgId);
+export async function sweepDeviceHealth(orgId: string): Promise<{ offline: number; restored: number }> {
+  const settings = (await getSettings(orgId));
   const config = { ...DEFAULT_CONFIG, ...((settings.engine ?? {}) as Partial<EngineConfig>) };
   const thresholdIso = new Date(Date.now() - config.deviceOfflineMinutes * 60_000).toISOString();
 
-  const stale = query<Record<string, unknown>>(
+  const stale = (await query<Record<string, unknown>>(
     `SELECT * FROM devices WHERE organization_id = ? AND is_active = 1 AND status != 'never_connected'
        AND (last_seen_at IS NULL OR last_seen_at < ?)`,
     [orgId, thresholdIso],
-  );
+  ));
 
   let offline = 0;
   for (const row of stale) {
     const deviceId = String(row.id);
     const alreadyOffline = String(row.status) === "offline";
-    updateDevice(deviceId, { status: "offline" });
+    (await updateDevice(deviceId, { status: "offline" }));
     const tankId = row.tank_id ? String(row.tank_id) : null;
     if (tankId) {
-      const tank = getTank(tankId);
-      if (tank) updateTank(tankId, { status: "offline" });
+      const tank = (await getTank(tankId));
+      if (tank) (await updateTank(tankId, { status: "offline" }));
     }
     if (!alreadyOffline) {
       offline += 1;
-      const device = getDevice(deviceId)!;
-      const tank = tankId ? getTank(tankId) : null;
-      const station = tank ? getStation(tank.stationId) : row.station_id ? getStation(String(row.station_id)) : null;
+      const device = (await getDevice(deviceId))!;
+      const tank = tankId ? (await getTank(tankId)) : null;
+      const station = tank ? (await getStation(tank.stationId)) : row.station_id ? (await getStation(String(row.station_id))) : null;
       const lastSeen = row.last_seen_at ? new Date(String(row.last_seen_at)) : null;
       const outageMinutes = lastSeen ? Math.round((Date.now() - lastSeen.getTime()) / 60000) : null;
-      createAlert({
+      (await createAlert({
         organizationId: orgId,
         stationId: station?.id ?? (tank?.stationId ?? ""),
         tankId: tank?.id ?? null,
@@ -660,44 +660,44 @@ export function sweepDeviceHealth(orgId: string): { offline: number; restored: n
         unit: "min",
         threshold: config.deviceOfflineMinutes,
         metadata: { deviceSerial: device.serialNumber, lastSeenAt: row.last_seen_at ?? null },
-      });
+      }));
     }
   }
 
   // Auto-restore: any device that has been marked offline but is now stale-free
-  const restored = query<Record<string, unknown>>(
+  const restored = (await query<Record<string, unknown>>(
     `SELECT id FROM devices WHERE organization_id = ? AND status = 'offline' AND last_seen_at IS NOT NULL AND last_seen_at >= ?`,
     [orgId, thresholdIso],
-  );
+  ));
   let restoredCount = 0;
   for (const row of restored) {
-    const device = getDevice(String(row.id));
+    const device = (await getDevice(String(row.id)));
     if (!device) continue;
-    updateDevice(device.id, { status: "online" });
+    (await updateDevice(device.id, { status: "online" }));
     if (device.tankId) {
-      const tank = getTank(device.tankId);
+      const tank = (await getTank(device.tankId));
       if (tank) {
         const percent = tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0;
-        updateTank(tank.id, { status: tankStatusFromPercent(percent) });
+        (await updateTank(tank.id, { status: tankStatusFromPercent(percent) }));
       }
     }
-    resolveAlertsOfType(device.id, device.type === "fuel_probe" ? "probe_offline" : "gps_offline", "Device communication restored");
+    (await resolveAlertsOfType(device.id, device.type === "fuel_probe" ? "probe_offline" : "gps_offline", "Device communication restored"));
     restoredCount += 1;
   }
 
   return { offline, restored: restoredCount };
 }
 
-function resolveAlertsOfType(deviceId: string, type: string, note: string): void {
-  const alerts = query<{ id: string }>(
+async function resolveAlertsOfType(deviceId: string, type: string, note: string): Promise<void> {
+  const alerts = (await query<{ id: string }>(
     "SELECT id FROM alerts WHERE device_id = ? AND type = ? AND status != 'resolved'",
     [deviceId, type],
-  );
+  ));
   for (const alert of alerts) {
-    execute(
+    (await execute(
       "UPDATE alerts SET status = 'resolved', resolved_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'), resolution_note = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?",
       [note, alert.id],
-    );
+    ));
   }
 }
 
@@ -716,27 +716,27 @@ export interface ReconciliationResult {
   exceedsThreshold: boolean;
 }
 
-export function reconcileTank(
+export async function reconcileTank(
   tankId: string,
   from: string,
   to: string,
   variancePct = DEFAULT_CONFIG.reconciliationVariancePct,
-): ReconciliationResult {
-  const openingRow = queryOne<{ v: number }>(
+): Promise<ReconciliationResult> {
+  const openingRow = (await queryOne<{ v: number }>(
     "SELECT volume_liters AS v FROM readings WHERE tank_id = ? AND ts <= ? ORDER BY ts DESC LIMIT 1",
     [tankId, from],
-  );
-  const closingRow = queryOne<{ v: number }>(
+  ));
+  const closingRow = (await queryOne<{ v: number }>(
     "SELECT volume_liters AS v FROM readings WHERE tank_id = ? AND ts <= ? ORDER BY ts DESC LIMIT 1",
     [tankId, to],
-  );
-  const totals = queryOne<Record<string, number>>(
+  ));
+  const totals = (await queryOne<Record<string, number>>(
     `SELECT
        COALESCE(SUM(CASE WHEN type = 'refill' THEN volume ELSE 0 END), 0) AS refills,
        COALESCE(SUM(CASE WHEN type = 'consumption' THEN volume ELSE 0 END), 0) AS consumption
      FROM fuel_events WHERE tank_id = ? AND ts >= ? AND ts <= ?`,
     [tankId, from, to],
-  );
+  ));
   const openingStock = Number(openingRow?.v ?? 0);
   const measured = Number(closingRow?.v ?? 0);
   const refills = Number(totals?.refills ?? 0);
@@ -760,14 +760,14 @@ export function reconcileTank(
 /* Stock coverage (PRD §38)                                                   */
 /* -------------------------------------------------------------------------- */
 
-export function stockCoverage(tankId: string, days = 7): { avgDailyConsumption: number; daysRemaining: number | null } {
+export async function stockCoverage(tankId: string, days = 7): Promise<{ avgDailyConsumption: number; daysRemaining: number | null }> {
   const from = new Date(Date.now() - days * 86_400_000).toISOString();
-  const row = queryOne<Record<string, number>>(
+  const row = (await queryOne<Record<string, number>>(
     `SELECT COALESCE(SUM(volume), 0) AS total FROM fuel_events WHERE tank_id = ? AND type = 'consumption' AND ts >= ?`,
     [tankId, from],
-  );
+  ));
   const avgDaily = Number(row?.total ?? 0) / days;
-  const tank = getTank(tankId);
+  const tank = (await getTank(tankId));
   if (!tank || avgDaily <= 0) return { avgDailyConsumption: avgDaily, daysRemaining: null };
   return { avgDailyConsumption: avgDaily, daysRemaining: tank.currentVolume / avgDaily };
 }

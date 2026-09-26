@@ -25,11 +25,17 @@ export interface DeviceFilter {
   order?: "asc" | "desc";
   page?: number;
   pageSize?: number;
+  stationIds?: string[];
 }
 
-export function listDevices(filter: DeviceFilter): { rows: Device[]; total: number } {
+export async function listDevices(filter: DeviceFilter): Promise<{ rows: Device[]; total: number }> {
   const where: string[] = ["d.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
+  if (filter.stationIds && filter.stationIds.length > 0) {
+    const stationPlaceholders = filter.stationIds.map(() => "?").join(", ");
+    where.push(`(d.station_id IN (${stationPlaceholders}) OR d.tank_id IN (SELECT id FROM tanks WHERE station_id IN (${stationPlaceholders})) OR d.vehicle_id IN (SELECT id FROM vehicles WHERE station_id IN (${stationPlaceholders})))`);
+    params.push(...filter.stationIds, ...filter.stationIds, ...filter.stationIds);
+  }
   if (filter.type) {
     where.push("d.type = ?");
     params.push(filter.type);
@@ -76,25 +82,25 @@ export function listDevices(filter: DeviceFilter): { rows: Device[]; total: numb
   const sortColumn = sortMap[filter.sort ?? "created_at"] ?? "d.created_at";
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM devices d ${clause}`, params)?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM devices d ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 24));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT d.* FROM devices d ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapDevice), total };
 }
 
-export function listAllDevices(orgId: string): Device[] {
-  return query<Record<string, unknown>>(
+export async function listAllDevices(orgId: string): Promise<Device[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM devices WHERE organization_id = ? ORDER BY type, serial_number",
     [orgId],
-  ).map(mapDevice);
+  )).map(mapDevice);
 }
 
-export function getDevice(deviceId: string): Device | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE id = ?", [deviceId]);
+export async function getDevice(deviceId: string): Promise<Device | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE id = ?", [deviceId]));
   return row ? mapDevice(row) : null;
 }
 
@@ -102,17 +108,17 @@ export function getDevice(deviceId: string): Device | null {
  * Looks up a device by the SHA-256 hash of its ingest API key. Used by the
  * webhook endpoint to authenticate hardware without storing plaintext keys.
  */
-export function getDeviceByApiKeyHash(hash: string): Device | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE api_key_hash = ?", [hash]);
+export async function getDeviceByApiKeyHash(hash: string): Promise<Device | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE api_key_hash = ?", [hash]));
   return row ? mapDevice(row) : null;
 }
 
-export function getDeviceBySerial(serial: string): Device | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE serial_number = ?", [serial]);
+export async function getDeviceBySerial(serial: string): Promise<Device | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE serial_number = ?", [serial]));
   return row ? mapDevice(row) : null;
 }
 
-export function createDevice(input: {
+export async function createDevice(input: {
   organizationId: string;
   type: Device["type"];
   serialNumber: string;
@@ -127,9 +133,9 @@ export function createDevice(input: {
   batteryPct?: number | null;
   apiKeyHash?: string | null;
   metadata?: Record<string, unknown>;
-}): Device {
+}): Promise<Device> {
   const deviceId = id("dev");
-  execute(
+  (await execute(
     `INSERT INTO devices (id, organization_id, type, serial_number, label, provider, model, firmware,
        station_id, tank_id, vehicle_id, signal_strength, battery_pct, api_key_hash, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -150,11 +156,11 @@ export function createDevice(input: {
       input.apiKeyHash ?? null,
       JSON.stringify(input.metadata ?? {}),
     ],
-  );
-  return getDevice(deviceId)!;
+  ));
+  return (await getDevice(deviceId))!;
 }
 
-export function updateDevice(deviceId: string, patch: Record<string, unknown>): Device | null {
+export async function updateDevice(deviceId: string, patch: Record<string, unknown>): Promise<Device | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -162,23 +168,23 @@ export function updateDevice(deviceId: string, patch: Record<string, unknown>): 
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getDevice(deviceId);
+  if (fields.length === 0) return (await getDevice(deviceId));
   values.push(deviceId);
-  execute(`UPDATE devices SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getDevice(deviceId);
+  (await execute(`UPDATE devices SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getDevice(deviceId));
 }
 
-export function deleteDevice(deviceId: string): void {
-  execute("DELETE FROM devices WHERE id = ?", [deviceId]);
+export async function deleteDevice(deviceId: string): Promise<void> {
+  (await execute("DELETE FROM devices WHERE id = ?", [deviceId]));
 }
 
-export function countDevices(orgId: string, type?: string): number {
+export async function countDevices(orgId: string, type?: string): Promise<number> {
   const row = type
-    ? queryOne<{ n: number }>("SELECT count(*) AS n FROM devices WHERE organization_id = ? AND type = ?", [
+    ? (await queryOne<{ n: number }>("SELECT count(*) AS n FROM devices WHERE organization_id = ? AND type = ?", [
         orgId,
         type,
-      ])
-    : queryOne<{ n: number }>("SELECT count(*) AS n FROM devices WHERE organization_id = ?", [orgId]);
+      ]))
+    : (await queryOne<{ n: number }>("SELECT count(*) AS n FROM devices WHERE organization_id = ?", [orgId]));
   return Number(row?.n ?? 0);
 }
 
@@ -224,12 +230,17 @@ export interface VehicleFilter {
   page?: number;
   pageSize?: number;
   includeArchived?: boolean;
+  stationIds?: string[];
 }
 
-export function listVehicles(filter: VehicleFilter): { rows: Vehicle[]; total: number } {
+export async function listVehicles(filter: VehicleFilter): Promise<{ rows: Vehicle[]; total: number }> {
   const where: string[] = ["v.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
   if (!filter.includeArchived) where.push("v.is_archived = 0");
+  if (filter.stationIds && filter.stationIds.length > 0) {
+    where.push(`v.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+    params.push(...filter.stationIds);
+  }
   if (filter.status) {
     where.push("v.status = ?");
     params.push(filter.status);
@@ -258,29 +269,29 @@ export function listVehicles(filter: VehicleFilter): { rows: Vehicle[]; total: n
   const sortColumn = sortMap[filter.sort ?? "name"] ?? "v.name";
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM vehicles v ${clause}`, params)?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM vehicles v ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 24));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT v.* FROM vehicles v ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapVehicle), total };
 }
 
-export function listAllVehicles(orgId: string): Vehicle[] {
-  return query<Record<string, unknown>>(
+export async function listAllVehicles(orgId: string): Promise<Vehicle[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM vehicles WHERE organization_id = ? AND is_archived = 0 ORDER BY name",
     [orgId],
-  ).map(mapVehicle);
+  )).map(mapVehicle);
 }
 
-export function getVehicle(vehicleId: string): Vehicle | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM vehicles WHERE id = ?", [vehicleId]);
+export async function getVehicle(vehicleId: string): Promise<Vehicle | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM vehicles WHERE id = ?", [vehicleId]));
   return row ? mapVehicle(row) : null;
 }
 
-export function createVehicle(input: {
+export async function createVehicle(input: {
   organizationId: string;
   name: string;
   plateNumber: string;
@@ -296,9 +307,9 @@ export function createVehicle(input: {
   driverName?: string | null;
   driverPhone?: string | null;
   notes?: string | null;
-}): Vehicle {
+}): Promise<Vehicle> {
   const vehicleId = id("veh");
-  execute(
+  (await execute(
     `INSERT INTO vehicles (id, organization_id, name, plate_number, type, make, model, year, fuel_type_id,
        tank_capacity, station_id, status, odometer_km, driver_name, driver_phone, notes, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -320,11 +331,11 @@ export function createVehicle(input: {
       input.driverPhone ?? null,
       input.notes ?? null,
     ],
-  );
-  return getVehicle(vehicleId)!;
+  ));
+  return (await getVehicle(vehicleId))!;
 }
 
-export function updateVehicle(vehicleId: string, patch: Record<string, unknown>): Vehicle | null {
+export async function updateVehicle(vehicleId: string, patch: Record<string, unknown>): Promise<Vehicle | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -332,14 +343,14 @@ export function updateVehicle(vehicleId: string, patch: Record<string, unknown>)
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getVehicle(vehicleId);
+  if (fields.length === 0) return (await getVehicle(vehicleId));
   values.push(vehicleId);
-  execute(`UPDATE vehicles SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getVehicle(vehicleId);
+  (await execute(`UPDATE vehicles SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getVehicle(vehicleId));
 }
 
-export function deleteVehicle(vehicleId: string): void {
-  execute("DELETE FROM vehicles WHERE id = ?", [vehicleId]);
+export async function deleteVehicle(vehicleId: string): Promise<void> {
+  (await execute("DELETE FROM vehicles WHERE id = ?", [vehicleId]));
 }
 
 function mapVehicle(row: Record<string, unknown>): Vehicle {

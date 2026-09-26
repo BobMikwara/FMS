@@ -20,14 +20,14 @@ export const GET = withPermission("reports.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 20);
-    const result = listReports({
+    const result = (await listReports({
       orgId: ctx.user.organizationId,
       category: params.get("category") ?? undefined,
       status: params.get("status") ?? undefined,
       search: params.get("search") ?? undefined,
       page,
       pageSize,
-    });
+    }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -45,7 +45,7 @@ export const POST = withPermission("reports.create", async (request, ctx) => {
     if (new Date(dateFrom).getTime() > new Date(dateTo).getTime()) {
       throw new ApiError(422, "The start date must be before the end date.", "validation_error");
     }
-    const report = createReport({
+    const report = (await createReport({
       organizationId: ctx.user.organizationId,
       createdById: ctx.user.id,
       title,
@@ -56,8 +56,8 @@ export const POST = withPermission("reports.create", async (request, ctx) => {
       filters: (body.filters ?? {}) as Record<string, unknown>,
       status: "ready",
       format: str(body.format ?? body.fileFormat, "pdf") as "pdf" | "excel" | "csv",
-    });
-    audit({
+    }));
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "report",
@@ -66,7 +66,7 @@ export const POST = withPermission("reports.create", async (request, ctx) => {
       summary: `${ctx.user.name} generated report "${report.title}"`,
       next: report,
       request,
-    });
+    }));
     return jsonCreated(report);
   } catch (error) {
     return jsonError(error as Error, request);

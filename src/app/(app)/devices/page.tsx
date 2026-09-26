@@ -1,5 +1,5 @@
 import { getCurrentUser } from "@/server/auth/session";
-import { listAllDevices } from "@/server/db/repo/devices";
+import { listAllDevices, listAllVehicles } from "@/server/db/repo/devices";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
 import { PageHeader } from "@/components/ui/layout";
 import { DevicesBrowser } from "./devices-browser";
@@ -10,10 +10,25 @@ export default async function DevicesPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const devices = listAllDevices(user.organizationId);
-  const stations = listAllStations(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
-  const vehicles = new Map<string, string>();
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const tanks = (await listAllTanks(user.organizationId)).filter(
+    (tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId),
+  );
+  const vehicles = new Map(
+    (await listAllVehicles(user.organizationId))
+      .filter((vehicle) => user.stationIds.length === 0 || (vehicle.stationId && user.stationIds.includes(vehicle.stationId)))
+      .map((vehicle) => [vehicle.id, `${vehicle.name} (${vehicle.plateNumber})`]),
+  );
+  const tankIds = new Set(tanks.map((tank) => tank.id));
+  const devices = (await listAllDevices(user.organizationId)).filter(
+    (device) =>
+      user.stationIds.length === 0 ||
+      (device.stationId && user.stationIds.includes(device.stationId)) ||
+      (device.tankId && tankIds.has(device.tankId)) ||
+      (device.vehicleId && vehicles.has(device.vehicleId)),
+  );
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
   const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
 

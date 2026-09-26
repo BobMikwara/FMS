@@ -11,8 +11,8 @@ export default async function FuelTypesPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const fuelTypes = listFuelTypes(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
+  const fuelTypes = (await listFuelTypes(user.organizationId));
+  const tanks = (await listAllTanks(user.organizationId));
 
   const rows = fuelTypes.map((fuel) => ({
     id: fuel.id,

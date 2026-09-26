@@ -12,10 +12,10 @@ export default async function EditStationPage({ params }: { params: Promise<{ st
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const station = getStation(stationId);
+  const station = (await getStation(stationId));
   if (!station || station.organizationId !== user.organizationId) notFound();
 
-  const organization = getOrganization(user.organizationId);
+  const organization = (await getOrganization(user.organizationId));
 
   return (
     <div className="space-y-5">

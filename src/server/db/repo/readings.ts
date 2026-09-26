@@ -23,9 +23,9 @@ export interface ReadingInput {
   raw?: Record<string, unknown> | null;
 }
 
-export function insertReading(input: ReadingInput): Reading {
+export async function insertReading(input: ReadingInput): Promise<Reading> {
   const readingId = id("rdg");
-  execute(
+  (await execute(
     `INSERT INTO readings (id, ts, organization_id, tank_id, device_id, volume_liters, level_percent,
        level_mm, temperature_c, water_level_mm, signal, battery_pct, raw)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -44,12 +44,12 @@ export function insertReading(input: ReadingInput): Reading {
       input.batteryPct ?? null,
       input.raw ? JSON.stringify(input.raw) : null,
     ],
-  );
-  return getReading(readingId)!;
+  ));
+  return (await getReading(readingId))!;
 }
 
-export function insertReadingsBulk(inputs: ReadingInput[]): number {
-  return insertMany(
+export async function insertReadingsBulk(inputs: ReadingInput[]): Promise<number> {
+  return (await insertMany(
     "readings",
     [
       "id",
@@ -82,40 +82,40 @@ export function insertReadingsBulk(inputs: ReadingInput[]): number {
       input.raw ? JSON.stringify(input.raw) : null,
     ]),
     500,
-  );
+  ));
 }
 
-export function getReading(readingId: string): Reading | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM readings WHERE id = ?", [readingId]);
+export async function getReading(readingId: string): Promise<Reading | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM readings WHERE id = ?", [readingId]));
   return row ? mapReading(row) : null;
 }
 
-export function latestReadingForTank(tankId: string): Reading | null {
-  const row = queryOne<Record<string, unknown>>(
+export async function latestReadingForTank(tankId: string): Promise<Reading | null> {
+  const row = (await queryOne<Record<string, unknown>>(
     "SELECT * FROM readings WHERE tank_id = ? ORDER BY ts DESC LIMIT 1",
     [tankId],
-  );
+  ));
   return row ? mapReading(row) : null;
 }
 
-export function latestReadingForDevice(deviceId: string): Reading | null {
-  const row = queryOne<Record<string, unknown>>(
+export async function latestReadingForDevice(deviceId: string): Promise<Reading | null> {
+  const row = (await queryOne<Record<string, unknown>>(
     "SELECT * FROM readings WHERE device_id = ? ORDER BY ts DESC LIMIT 1",
     [deviceId],
-  );
+  ));
   return row ? mapReading(row) : null;
 }
 
-export function readingsForTank(
+export async function readingsForTank(
   tankId: string,
   from: string,
   to: string,
   limit = 2000,
-): Reading[] {
-  return query<Record<string, unknown>>(
+): Promise<Reading[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM readings WHERE tank_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC LIMIT ?",
     [tankId, from, to, limit],
-  ).map(mapReading);
+  )).map(mapReading);
 }
 
 export interface ReadingPageFilter {
@@ -129,7 +129,7 @@ export interface ReadingPageFilter {
   pageSize?: number;
 }
 
-export function listReadings(filter: ReadingPageFilter): { rows: Reading[]; total: number } {
+export async function listReadings(filter: ReadingPageFilter): Promise<{ rows: Reading[]; total: number }> {
   const where: string[] = ["r.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
   if (filter.tankId) {
@@ -153,23 +153,23 @@ export function listReadings(filter: ReadingPageFilter): { rows: Reading[]; tota
     params.push(filter.to);
   }
   const clause = `WHERE ${where.join(" AND ")}`;
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM readings r ${clause}`, params)?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM readings r ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(500, Math.max(5, filter.pageSize ?? 50));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT r.* FROM readings r ${clause} ORDER BY r.ts DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapReading), total };
 }
 
-export function countReadings(orgId: string): number {
-  return Number(queryOne<{ n: number }>("SELECT count(*) AS n FROM readings WHERE organization_id = ?", [orgId])?.n ?? 0);
+export async function countReadings(orgId: string): Promise<number> {
+  return Number((await queryOne<{ n: number }>("SELECT count(*) AS n FROM readings WHERE organization_id = ?", [orgId]))?.n ?? 0);
 }
 
 /** Removes raw readings older than the retention window (data lifecycle). */
-export function pruneReadings(orgId: string, olderThanIso: string): number {
-  const result = execute("DELETE FROM readings WHERE organization_id = ? AND ts < ?", [orgId, olderThanIso]);
+export async function pruneReadings(orgId: string, olderThanIso: string): Promise<number> {
+  const result = (await execute("DELETE FROM readings WHERE organization_id = ? AND ts < ?", [orgId, olderThanIso]));
   return result.changes;
 }
 

@@ -18,9 +18,9 @@ export default async function ScheduledReportsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const scheduled = listScheduledReports(user.organizationId);
-  const stations = listAllStations(user.organizationId);
-  const users = listUsers(user.organizationId);
+  const scheduled = (await listScheduledReports(user.organizationId));
+  const stations = (await listAllStations(user.organizationId));
+  const users = (await listUsers(user.organizationId));
 
   const rows = scheduled.map((entry) => ({
     id: entry.id,

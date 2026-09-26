@@ -18,8 +18,8 @@ export default async function NotificationSettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const settings = getSettings(user.organizationId);
-  const users = listUsers(user.organizationId);
+  const settings = (await getSettings(user.organizationId));
+  const users = (await listUsers(user.organizationId));
 
   const notifications = (settings.notifications ?? {}) as Record<string, unknown>;
 

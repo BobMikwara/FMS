@@ -10,9 +10,12 @@ export default async function StationsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const stations = listAllStations(user.organizationId).filter((station) => !station.isArchived);
-  const rows = stations.map((station) => {
-    const detail = buildStationDetail(station.id, "today");
+  const allStations = await listAllStations(user.organizationId);
+  const stations = allStations
+    .filter((station) => user.stationIds.length === 0 || user.stationIds.includes(station.id))
+    .filter((station) => !station.isArchived);
+  const rows = await Promise.all(stations.map(async (station) => {
+    const detail = (await buildStationDetail(station.id, "today"));
     return {
       id: station.id,
       name: station.name,
@@ -37,7 +40,7 @@ export default async function StationsPage() {
       totalDevices: (detail?.devices ?? []).length,
       createdAt: station.createdAt,
     };
-  });
+  }));
 
   return (
     <div className="space-y-5">

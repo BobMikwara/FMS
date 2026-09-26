@@ -14,13 +14,19 @@ export default async function NewDevicePage() {
   if (!user) return null;
 
   const orgId = user.organizationId;
-  const stations = listAllStations(orgId);
-  const tanks = listAllTanks(orgId);
-  const vehicles = listAllVehicles(orgId);
-  const fuelTypes = listFuelTypes(orgId);
+  const stations = (await listAllStations(orgId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const tanks = (await listAllTanks(orgId)).filter(
+    (tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId),
+  );
+  const vehicles = (await listAllVehicles(orgId)).filter(
+    (vehicle) => user.stationIds.length === 0 || (vehicle.stationId && user.stationIds.includes(vehicle.stationId)),
+  );
+  const fuelTypes = (await listFuelTypes(orgId));
 
   // A tank can only have one probe, so tanks that already have one are excluded.
-  const probes = listDevices({ orgId, type: "fuel_probe", pageSize: 500 }).rows;
+  const probes = (await listDevices({ orgId, type: "fuel_probe", pageSize: 500 })).rows;
   const probedTanks = new Set(probes.map((device) => device.tankId));
   const fuelLabel = new Map(fuelTypes.map((fuelType) => [fuelType.id, fuelType.displayName]));
   const stationLabel = new Map(stations.map((station) => [station.id, station.name]));

@@ -40,8 +40,8 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const organization = getOrganization(user.organizationId);
-  const stationCount = listAllStations(user.organizationId).length;
+  const organization = (await getOrganization(user.organizationId));
+  const stationCount = (await listAllStations(user.organizationId)).length;
 
   return (
     <div className="space-y-5">

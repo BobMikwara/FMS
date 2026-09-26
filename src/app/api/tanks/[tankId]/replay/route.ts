@@ -17,15 +17,19 @@ export const dynamic = "force-dynamic";
 export const GET = withPermission("tanks.view", async (request, ctx) => {
   try {
     const tankId = ctx.params?.tankId ?? "";
-    const tank = getTank(tankId);
-    if (!tank || tank.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
+    const tank = (await getTank(tankId));
+    if (
+      !tank ||
+      tank.organizationId !== ctx.user.organizationId ||
+      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+    ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;
     const from = params.get("from") ?? isoDaysAgo(1);
     const to = params.get("to") ?? new Date().toISOString();
     const buckets = Math.min(Math.max(Number(params.get("buckets") ?? 96) || 96, 8), 500);
 
-    const rows = readingsForTank(tankId, from, to, 50000);
+    const rows = (await readingsForTank(tankId, from, to, 50000));
     const stride = Math.max(1, Math.ceil(rows.length / buckets));
     const sampled = rows.filter((_, position) => position % stride === 0 || position === rows.length - 1);
 
@@ -37,7 +41,7 @@ export const GET = withPermission("tanks.view", async (request, ctx) => {
       temperatureC: reading.temperatureC == null ? null : Number(reading.temperatureC),
     }));
 
-    const events = listEvents({ orgId: ctx.user.organizationId, tankId, from, to, page: 1, pageSize: 200 }).rows;
+    const events = (await listEvents({ orgId: ctx.user.organizationId, tankId, from, to, page: 1, pageSize: 200 })).rows;
     const movements = events.map((event) => ({
       id: event.id,
       ts: event.ts,

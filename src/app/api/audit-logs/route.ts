@@ -7,7 +7,7 @@ export const GET = withPermission("audit.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 30);
-    const result = listAuditLogs({
+    const result = (await listAuditLogs({
       orgId: ctx.user.organizationId,
       userId: params.get("userId") ?? undefined,
       entity: params.get("entity") ?? undefined,
@@ -17,7 +17,7 @@ export const GET = withPermission("audit.view", async (request, ctx) => {
       to: params.get("to") ?? undefined,
       page,
       pageSize,
-    });
+    }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);

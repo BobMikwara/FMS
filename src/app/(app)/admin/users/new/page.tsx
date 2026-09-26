@@ -12,8 +12,8 @@ export default async function InviteUserPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const roles = listRoles();
-  const stations = listAllStations(user.organizationId);
+  const roles = (await listRoles());
+  const stations = (await listAllStations(user.organizationId));
 
   return (
     <div className="space-y-5">

@@ -13,55 +13,75 @@ import type {
 /* Organizations                                                              */
 /* -------------------------------------------------------------------------- */
 
-export function listOrganizations(): Organization[] {
-  return query<Organization>("SELECT * FROM organizations ORDER BY name");
+export async function listOrganizations(): Promise<Organization[]> {
+  return (await query<Record<string, unknown>>("SELECT * FROM organizations ORDER BY name")).map(mapOrganization);
 }
 
-export function getOrganization(orgId: string): Organization | null {
-  return queryOne<Organization>("SELECT * FROM organizations WHERE id = ?", [orgId]);
+export async function getOrganization(orgId: string): Promise<Organization | null> {
+  const row = await queryOne<Record<string, unknown>>("SELECT * FROM organizations WHERE id = ?", [orgId]);
+  return row ? mapOrganization(row) : null;
 }
 
-export function getOrganizationBySlug(slug: string): Organization | null {
-  return queryOne<Organization>("SELECT * FROM organizations WHERE slug = ?", [slug]);
+export async function getOrganizationBySlug(slug: string): Promise<Organization | null> {
+  const row = await queryOne<Record<string, unknown>>("SELECT * FROM organizations WHERE slug = ?", [slug]);
+  return row ? mapOrganization(row) : null;
 }
 
-export function updateOrganization(
+function mapOrganization(row: Record<string, unknown>): Organization {
+  return {
+    id: String(row.id),
+    name: String(row.name),
+    slug: String(row.slug),
+    logoUrl: row.logo_url == null ? null : String(row.logo_url),
+    currency: String(row.currency ?? "TZS"),
+    units: String(row.units ?? "liters") as Organization["units"],
+    tempUnit: String(row.temp_unit ?? "celsius") as Organization["tempUnit"],
+    timezone: String(row.timezone ?? "Africa/Dar_es_Salaam"),
+    locale: String(row.locale ?? "en"),
+    plan: String(row.plan ?? "growth"),
+    isActive: intToBool(row.is_active),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export async function updateOrganization(
   orgId: string,
   patch: Partial<Omit<Organization, "id" | "createdAt" | "updatedAt">>,
-): Organization | null {
+): Promise<Organization | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     fields.push(snake(key));
-    values.push(serialize(key, value));
+    values.push((await serialize(key, value)));
   }
-  if (fields.length === 0) return getOrganization(orgId);
+  if (fields.length === 0) return (await getOrganization(orgId));
   values.push(orgId);
-  execute(`UPDATE organizations SET ${fields.map((f) => `${f} = ?`).join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getOrganization(orgId);
+  (await execute(`UPDATE organizations SET ${fields.map((f) => `${f} = ?`).join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getOrganization(orgId));
 }
 
 /* -------------------------------------------------------------------------- */
 /* Roles & permissions                                                        */
 /* -------------------------------------------------------------------------- */
 
-export function listRoles(): Role[] {
-  const rows = query<Record<string, unknown>>("SELECT * FROM roles ORDER BY name");
+export async function listRoles(): Promise<Role[]> {
+  const rows = (await query<Record<string, unknown>>("SELECT * FROM roles ORDER BY name"));
   return rows.map(mapRole);
 }
 
-export function getRole(roleId: string): Role | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM roles WHERE id = ?", [roleId]);
-  return row ? mapRole(row) : null;
+export async function getRole(roleId: string): Promise<Role | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM roles WHERE id = ?", [roleId]));
+  return row ? (await mapRole(row)) : null;
 }
 
-export function getRoleByKey(key: string): Role | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM roles WHERE key = ?", [key]);
-  return row ? mapRole(row) : null;
+export async function getRoleByKey(key: string): Promise<Role | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM roles WHERE key = ?", [key]));
+  return row ? (await mapRole(row)) : null;
 }
 
-export function updateRole(roleId: string, patch: { name?: string; description?: string; permissions?: string[] }): Role | null {
+export async function updateRole(roleId: string, patch: { name?: string; description?: string; permissions?: string[] }): Promise<Role | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   if (patch.name !== undefined) {
@@ -76,10 +96,10 @@ export function updateRole(roleId: string, patch: { name?: string; description?:
     fields.push("permissions = ?");
     values.push(JSON.stringify(patch.permissions));
   }
-  if (fields.length === 0) return getRole(roleId);
+  if (fields.length === 0) return (await getRole(roleId));
   values.push(roleId);
-  execute(`UPDATE roles SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getRole(roleId);
+  (await execute(`UPDATE roles SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getRole(roleId));
 }
 
 function mapRole(row: Record<string, unknown>): Role {
@@ -99,43 +119,43 @@ function mapRole(row: Record<string, unknown>): Role {
 /* Users                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export function listUsers(orgId: string): User[] {
-  const rows = query<Record<string, unknown>>(
+export async function listUsers(orgId: string): Promise<User[]> {
+  const rows = (await query<Record<string, unknown>>(
     `SELECT u.*, r.key AS role_key, r.name AS role_name, r.permissions AS role_permissions
      FROM users u JOIN roles r ON r.id = u.role_id
      WHERE u.organization_id = ? ORDER BY u.created_at DESC`,
     [orgId],
-  );
-  const stationMap = userStationMap(rows.map((r) => String(r.id)));
+  ));
+  const stationMap = (await userStationMap(rows.map((r) => String(r.id))));
   return rows.map((row) => mapUser(row, stationMap));
 }
 
-export function getUser(userId: string): User | null {
-  const row = queryOne<Record<string, unknown>>(
+export async function getUser(userId: string): Promise<User | null> {
+  const row = (await queryOne<Record<string, unknown>>(
     `SELECT u.*, r.key AS role_key, r.name AS role_name, r.permissions AS role_permissions
      FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
     [userId],
-  );
-  return row ? mapUser(row, userStationMap([userId])) : null;
+  ));
+  return row ? (await mapUser(row, (await userStationMap([userId])))) : null;
 }
 
-export function getUserByEmail(email: string): (User & { passwordHash: string }) | null {
-  const row = queryOne<Record<string, unknown>>(
+export async function getUserByEmail(email: string): Promise<(User & { passwordHash: string }) | null> {
+  const row = (await queryOne<Record<string, unknown>>(
     `SELECT u.*, r.key AS role_key, r.name AS role_name, r.permissions AS role_permissions
      FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = ?`,
     [email.toLowerCase()],
-  );
+  ));
   if (!row) return null;
-  const user = mapUser(row, userStationMap([String(row.id)]));
+  const user = (await mapUser(row, (await userStationMap([String(row.id)]))));
   return { ...user, passwordHash: String(row.password_hash) };
 }
 
-export function countUsers(orgId: string): number {
-  const row = queryOne<{ n: number }>("SELECT count(*) AS n FROM users WHERE organization_id = ?", [orgId]);
+export async function countUsers(orgId: string): Promise<number> {
+  const row = (await queryOne<{ n: number }>("SELECT count(*) AS n FROM users WHERE organization_id = ?", [orgId]));
   return Number(row?.n ?? 0);
 }
 
-export function createUser(input: {
+export async function createUser(input: {
   organizationId: string;
   email: string;
   name: string;
@@ -146,9 +166,9 @@ export function createUser(input: {
   status?: "active" | "invited" | "suspended";
   stationIds?: string[];
   mfaEnabled?: boolean;
-}): User {
+}): Promise<User> {
   const userId = id("usr");
-  execute(
+  (await execute(
     `INSERT INTO users (id, organization_id, email, name, password_hash, role_id, status, phone, job_title, mfa_enabled, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
     [
@@ -163,12 +183,12 @@ export function createUser(input: {
       input.jobTitle ?? null,
       input.mfaEnabled ? 1 : 0,
     ],
-  );
-  setUserStations(userId, input.stationIds ?? []);
-  return getUser(userId)!;
+  ));
+  (await setUserStations(userId, input.stationIds ?? []));
+  return (await getUser(userId))!;
 }
 
-export function updateUser(
+export async function updateUser(
   userId: string,
   patch: {
     name?: string;
@@ -184,7 +204,7 @@ export function updateUser(
     failedAttempts?: number;
     lockedUntil?: string | null;
   },
-): User | null {
+): Promise<User | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   const push = (column: string, value: unknown) => {
@@ -203,31 +223,31 @@ export function updateUser(
   if (patch.lastLoginIp !== undefined) push("last_login_ip", patch.lastLoginIp);
   if (patch.failedAttempts !== undefined) push("failed_attempts", patch.failedAttempts);
   if (patch.lockedUntil !== undefined) push("locked_until", patch.lockedUntil);
-  if (fields.length === 0) return getUser(userId);
+  if (fields.length === 0) return (await getUser(userId));
   values.push(userId);
-  execute(`UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getUser(userId);
+  (await execute(`UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getUser(userId));
 }
 
-export function deleteUser(userId: string): void {
-  execute("DELETE FROM users WHERE id = ?", [userId]);
+export async function deleteUser(userId: string): Promise<void> {
+  (await execute("DELETE FROM users WHERE id = ?", [userId]));
 }
 
-export function setUserStations(userId: string, stationIds: string[]): void {
-  execute("DELETE FROM user_stations WHERE user_id = ?", [userId]);
+export async function setUserStations(userId: string, stationIds: string[]): Promise<void> {
+  (await execute("DELETE FROM user_stations WHERE user_id = ?", [userId]));
   for (const stationId of stationIds) {
-    execute("INSERT OR IGNORE INTO user_stations (user_id, station_id) VALUES (?, ?)", [userId, stationId]);
+    (await execute("INSERT INTO user_stations (user_id, station_id) VALUES (?, ?) ON CONFLICT DO NOTHING", [userId, stationId]));
   }
 }
 
-export function userStationMap(userIds: string[]): Map<string, string[]> {
+export async function userStationMap(userIds: string[]): Promise<Map<string, string[]>> {
   const map = new Map<string, string[]>();
   if (userIds.length === 0) return map;
   const placeholders = userIds.map(() => "?").join(", ");
-  const rows = query<{ user_id: string; station_id: string }>(
+  const rows = (await query<{ user_id: string; station_id: string }>(
     `SELECT user_id, station_id FROM user_stations WHERE user_id IN (${placeholders})`,
     userIds,
-  );
+  ));
   for (const row of rows) {
     const list = map.get(row.user_id) ?? [];
     list.push(row.station_id);
@@ -264,30 +284,29 @@ function mapUser(row: Record<string, unknown>, stationMap: Map<string, string[]>
 /* Password reset tokens                                                      */
 /* -------------------------------------------------------------------------- */
 
-export function createResetToken(userId: string, tokenHash: string, expiresAt: string): void {
-  execute(
+export async function createResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
+  (await execute(
     "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
     [id("prt"), userId, tokenHash, expiresAt],
-  );
+  ));
 }
 
-export function consumeResetToken(tokenHash: string): string | null {
-  const row = queryOne<{ user_id: string; expires_at: string; used_at: string | null }>(
-    "SELECT user_id, expires_at, used_at FROM password_reset_tokens WHERE token_hash = ?",
-    [tokenHash],
+export async function consumeResetToken(tokenHash: string): Promise<string | null> {
+  const row = await queryOne<{ user_id: string }>(
+    `UPDATE password_reset_tokens
+     SET used_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')
+     WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+     RETURNING user_id`,
+    [tokenHash, new Date().toISOString()],
   );
-  if (!row) return null;
-  if (row.used_at) return null;
-  if (new Date(row.expires_at).getTime() < Date.now()) return null;
-  execute("UPDATE password_reset_tokens SET used_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE token_hash = ?", [tokenHash]);
-  return String(row.user_id);
+  return row ? String(row.user_id) : null;
 }
 
 /* -------------------------------------------------------------------------- */
 /* Audit log                                                                  */
 /* -------------------------------------------------------------------------- */
 
-export function createAuditLog(input: {
+export async function createAuditLog(input: {
   userId: string | null;
   userLabel: string;
   action: string;
@@ -299,9 +318,9 @@ export function createAuditLog(input: {
   next?: unknown;
   ip?: string | null;
   userAgent?: string | null;
-}): AuditLog {
+}): Promise<AuditLog> {
   const auditId = id("aud");
-  execute(
+  (await execute(
     `INSERT INTO audit_logs (id, ts, user_id, user_label, action, entity, entity_id, entity_label, summary, previous, next, ip, user_agent)
      VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -318,12 +337,12 @@ export function createAuditLog(input: {
       input.ip ?? null,
       input.userAgent ?? null,
     ],
-  );
-  return getAuditLog(auditId)!;
+  ));
+  return (await getAuditLog(auditId))!;
 }
 
-export function getAuditLog(auditId: string): AuditLog | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM audit_logs WHERE id = ?", [auditId]);
+export async function getAuditLog(auditId: string): Promise<AuditLog | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM audit_logs WHERE id = ?", [auditId]));
   return row ? mapAuditLog(row) : null;
 }
 
@@ -339,8 +358,8 @@ export interface AuditFilter {
   pageSize?: number;
 }
 
-export function listAuditLogs(filter: AuditFilter): { rows: AuditLog[]; total: number } {
-  const where: string[] = ["l.user_id IN (SELECT id FROM users WHERE organization_id = ?) OR l.user_id IS NULL"];
+export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditLog[]; total: number }> {
+  const where: string[] = ["l.user_id IN (SELECT id FROM users WHERE organization_id = ?)"];
   const params: unknown[] = [filter.orgId];
   if (filter.userId) {
     where.push("l.user_id = ?");
@@ -369,14 +388,14 @@ export function listAuditLogs(filter: AuditFilter): { rows: AuditLog[]; total: n
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = Number(
-    queryOne<{ n: number }>(`SELECT count(*) AS n FROM audit_logs l ${clause}`, params)?.n ?? 0,
+    (await queryOne<{ n: number }>(`SELECT count(*) AS n FROM audit_logs l ${clause}`, params))?.n ?? 0,
   );
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(5, filter.pageSize ?? 25));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT l.* FROM audit_logs l ${clause} ORDER BY l.ts DESC LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapAuditLog), total };
 }
 
@@ -402,44 +421,44 @@ function mapAuditLog(row: Record<string, unknown>): AuditLog {
 /* Settings                                                                   */
 /* -------------------------------------------------------------------------- */
 
-export function getSettings(orgId: string): Record<string, unknown> {
-  const rows = query<{ key: string; value: string }>(
+export async function getSettings(orgId: string): Promise<Record<string, unknown>> {
+  const rows = (await query<{ key: string; value: string }>(
     "SELECT key, value FROM system_settings WHERE organization_id = ?",
     [orgId],
-  );
+  ));
   const out: Record<string, unknown> = {};
   for (const row of rows) out[row.key] = parseJson(row.value, null);
   return out;
 }
 
-export function getSetting(orgId: string, key: string, fallback: unknown = null): unknown {
-  const row = queryOne<{ value: string }>(
+export async function getSetting(orgId: string, key: string, fallback: unknown = null): Promise<unknown> {
+  const row = (await queryOne<{ value: string }>(
     "SELECT value FROM system_settings WHERE organization_id = ? AND key = ?",
     [orgId, key],
-  );
+  ));
   return row ? parseJson(row.value, fallback) : fallback;
 }
 
-export function setSetting(orgId: string, key: string, value: unknown): void {
+export async function setSetting(orgId: string, key: string, value: unknown): Promise<void> {
   const serialized = JSON.stringify(value === undefined ? null : value);
-  execute(
+  (await execute(
     `INSERT INTO system_settings (id, organization_id, key, value, updated_at)
      VALUES (?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
      ON CONFLICT(organization_id, key) DO UPDATE SET value = excluded.value, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`,
     [id("set"), orgId, key, serialized],
-  );
+  ));
 }
 
-export function setSettings(orgId: string, values: Record<string, unknown>): Record<string, unknown> {
-  for (const [key, value] of Object.entries(values)) setSetting(orgId, key, value);
-  return getSettings(orgId);
+export async function setSettings(orgId: string, values: Record<string, unknown>): Promise<Record<string, unknown>> {
+  for (const [key, value] of Object.entries(values)) (await setSetting(orgId, key, value));
+  return (await getSettings(orgId));
 }
 
 /* -------------------------------------------------------------------------- */
 /* Notifications                                                              */
 /* -------------------------------------------------------------------------- */
 
-export function createNotification(input: {
+export async function createNotification(input: {
   organizationId: string;
   userId?: string | null;
   alertId?: string | null;
@@ -447,9 +466,9 @@ export function createNotification(input: {
   body: string;
   severity?: string;
   channel?: string;
-}): Notification {
+}): Promise<Notification> {
   const notificationId = id("ntf");
-  execute(
+  (await execute(
     `INSERT INTO notifications (id, organization_id, user_id, alert_id, title, body, severity, channel)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     [
@@ -462,41 +481,46 @@ export function createNotification(input: {
       input.severity ?? "info",
       input.channel ?? "in_app",
     ],
-  );
-  return getNotification(notificationId)!;
+  ));
+  return (await getNotification(notificationId))!;
 }
 
-export function getNotification(notificationId: string): Notification | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM notifications WHERE id = ?", [notificationId]);
+export async function getNotification(notificationId: string): Promise<Notification | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM notifications WHERE id = ?", [notificationId]));
   return row ? mapNotification(row) : null;
 }
 
-export function listNotifications(orgId: string, limit = 30): Notification[] {
-  const rows = query<Record<string, unknown>>(
-    "SELECT * FROM notifications WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?",
-    [orgId, limit],
-  );
+export async function listNotifications(orgId: string, limit = 30, userId?: string): Promise<Notification[]> {
+  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+  const rows = (await query<Record<string, unknown>>(
+    `SELECT * FROM notifications WHERE organization_id = ?${userClause} ORDER BY created_at DESC LIMIT ?`,
+    userId ? [orgId, userId, limit] : [orgId, limit],
+  ));
   return rows.map(mapNotification);
 }
 
-export function countUnreadNotifications(orgId: string): number {
-  const row = queryOne<{ n: number }>(
-    "SELECT count(*) AS n FROM notifications WHERE organization_id = ? AND is_read = 0",
-    [orgId],
-  );
+export async function countUnreadNotifications(orgId: string, userId?: string): Promise<number> {
+  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+  const row = (await queryOne<{ n: number }>(
+    `SELECT count(*) AS n FROM notifications WHERE organization_id = ? AND is_read = 0${userClause}`,
+    userId ? [orgId, userId] : [orgId],
+  ));
   return Number(row?.n ?? 0);
 }
 
-export function markNotificationsRead(orgId: string, ids?: string[]): void {
+export async function markNotificationsRead(orgId: string, ids?: string[], userId?: string): Promise<number> {
+  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
   if (ids && ids.length > 0) {
     const placeholders = ids.map(() => "?").join(", ");
-    execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})`, [
+    const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})${userClause}`, [
       orgId,
       ...ids,
+      ...(userId ? [userId] : []),
     ]);
-    return;
+    return result.changes;
   }
-  execute("UPDATE notifications SET is_read = 1 WHERE organization_id = ?", [orgId]);
+  const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ?${userClause}`, [orgId, ...(userId ? [userId] : [])]);
+  return result.changes;
 }
 
 function mapNotification(row: Record<string, unknown>): Notification {
@@ -518,20 +542,20 @@ function mapNotification(row: Record<string, unknown>): Notification {
 /* Integrations                                                               */
 /* -------------------------------------------------------------------------- */
 
-export function listIntegrations(orgId: string): Integration[] {
-  const rows = query<Record<string, unknown>>(
+export async function listIntegrations(orgId: string): Promise<Integration[]> {
+  const rows = (await query<Record<string, unknown>>(
     "SELECT * FROM integrations WHERE organization_id = ? ORDER BY kind, provider",
     [orgId],
-  );
+  ));
   return rows.map(mapIntegration);
 }
 
-export function getIntegration(integrationId: string): Integration | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM integrations WHERE id = ?", [integrationId]);
+export async function getIntegration(integrationId: string): Promise<Integration | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM integrations WHERE id = ?", [integrationId]));
   return row ? mapIntegration(row) : null;
 }
 
-export function upsertIntegration(input: {
+export async function upsertIntegration(input: {
   organizationId: string;
   kind: string;
   provider: string;
@@ -542,14 +566,14 @@ export function upsertIntegration(input: {
   isEnabled?: boolean;
   lastSyncAt?: string | null;
   lastError?: string | null;
-}): Integration {
-  const existing = queryOne<{ id: string }>(
+}): Promise<Integration> {
+  const existing = (await queryOne<{ id: string }>(
     "SELECT id FROM integrations WHERE organization_id = ? AND kind = ? AND provider = ?",
     [input.organizationId, input.kind, input.provider],
-  );
+  ));
   const integrationId = existing?.id ?? id("int");
   const configJson = JSON.stringify(input.config ?? {});
-  execute(
+  (await execute(
     `INSERT INTO integrations (id, organization_id, kind, provider, name, status, config, secret_ref, is_enabled, last_sync_at, last_error, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
      ON CONFLICT(organization_id, kind, provider) DO UPDATE SET
@@ -574,11 +598,11 @@ export function upsertIntegration(input: {
       input.lastSyncAt ?? null,
       input.lastError ?? null,
     ],
-  );
-  return getIntegration(integrationId)!;
+  ));
+  return (await getIntegration(integrationId))!;
 }
 
-export function updateIntegration(
+export async function updateIntegration(
   integrationId: string,
   patch: Partial<{
     name: string;
@@ -589,7 +613,7 @@ export function updateIntegration(
     lastSyncAt: string | null;
     lastError: string | null;
   }>,
-): Integration | null {
+): Promise<Integration | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   if (patch.name !== undefined) {
@@ -620,14 +644,14 @@ export function updateIntegration(
     fields.push("last_error = ?");
     values.push(patch.lastError);
   }
-  if (fields.length === 0) return getIntegration(integrationId);
+  if (fields.length === 0) return (await getIntegration(integrationId));
   values.push(integrationId);
-  execute(`UPDATE integrations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getIntegration(integrationId);
+  (await execute(`UPDATE integrations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getIntegration(integrationId));
 }
 
-export function deleteIntegration(integrationId: string): void {
-  execute("DELETE FROM integrations WHERE id = ?", [integrationId]);
+export async function deleteIntegration(integrationId: string): Promise<void> {
+  (await execute("DELETE FROM integrations WHERE id = ?", [integrationId]));
 }
 
 function mapIntegration(row: Record<string, unknown>): Integration {

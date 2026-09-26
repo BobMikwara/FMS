@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("organizations.manage", async (request, ctx) => {
   try {
-    const rows = listOrganizations().filter((organization) => organization.id === ctx.user.organizationId);
+    const rows = (await listOrganizations()).filter((organization) => organization.id === ctx.user.organizationId);
     return jsonOk({ rows, total: rows.length });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -19,11 +19,11 @@ export const PATCH = withPermission("organizations.manage", async (request, ctx)
     for (const key of ["name", "slug", "currency", "units", "tempUnit", "timezone", "locale", "logoUrl"]) {
       if (body[key] !== undefined) patch[key] = body[key];
     }
-    const organization = updateOrganization(ctx.user.organizationId, patch);
+    const organization = (await updateOrganization(ctx.user.organizationId, patch));
     if (!organization) {
       return jsonError(notFound("Organization not found."));
     }
-    audit({
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "organization",
@@ -32,7 +32,7 @@ export const PATCH = withPermission("organizations.manage", async (request, ctx)
       summary: `${ctx.user.name} updated organization settings for ${organization.name}`,
       next: organization,
       request,
-    });
+    }));
     return jsonOk(organization);
   } catch (error) {
     return jsonError(error as Error, request);

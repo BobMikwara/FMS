@@ -20,12 +20,19 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("alert_rules.view", async (request, ctx) => {
   try {
-    const rules = listAlertRules(ctx.user.organizationId);
-    const tanks = listAllTanks(ctx.user.organizationId);
-    const stations = listAllStations(ctx.user.organizationId);
+    const rules = (await listAlertRules(ctx.user.organizationId));
+    const tanks = (await listAllTanks(ctx.user.organizationId));
+    const stations = (await listAllStations(ctx.user.organizationId));
     const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
     const stationName = new Map(stations.map((station) => [station.id, station.name]));
-    const rows = rules.map((rule) => ({
+    const visibleRules = ctx.user.stationIds.length > 0
+      ? rules.filter((rule) => {
+          if (rule.stationId) return ctx.user.stationIds.includes(rule.stationId);
+          if (rule.tankId) return tanks.some((tank) => tank.id === rule.tankId && ctx.user.stationIds.includes(tank.stationId));
+          return false;
+        })
+      : rules;
+    const rows = visibleRules.map((rule) => ({
       ...rule,
       tankName: rule.tankId ? (tankName.get(rule.tankId) ?? null) : null,
       stationName: rule.stationId ? (stationName.get(rule.stationId) ?? null) : null,
@@ -48,9 +55,20 @@ export const POST = withPermission("alert_rules.manage", async (request, ctx) =>
     if (scope === "station" && !body.stationId) {
       throw new ApiError(422, "A station-scoped rule must be attached to a station.", "validation_error");
     }
+    const tanks = await listAllTanks(ctx.user.organizationId);
+    const stations = await listAllStations(ctx.user.organizationId);
+    if (body.tankId && !tanks.some((tank) => tank.id === String(body.tankId))) {
+      throw new ApiError(422, "The selected tank does not exist in your organization.", "validation_error");
+    }
+    if (body.stationId && !stations.some((station) => station.id === String(body.stationId))) {
+      throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
+    }
+    if (ctx.user.stationIds.length > 0 && body.stationId && !ctx.user.stationIds.includes(String(body.stationId))) {
+      throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
+    }
   let rule!: AlertRule;
   try {
-      rule = createAlertRule({
+      rule = (await createAlertRule({
         organizationId: ctx.user.organizationId,
         name,
         description: str(body.description) || null,
@@ -65,11 +83,11 @@ export const POST = withPermission("alert_rules.manage", async (request, ctx) =>
         channels: Array.isArray(body.channels) ? (body.channels as string[]) : ["in_app"],
         isEnabled: body.isEnabled !== false,
         cooldownMin: num(body.cooldownMin, 30),
-      });
+      }));
   } catch (error) {
     uniqueViolation(error, "An alert rule with this name", "name");
   }
-    audit({
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "alert_rule",
@@ -78,7 +96,7 @@ export const POST = withPermission("alert_rules.manage", async (request, ctx) =>
       summary: `${ctx.user.name} created alert rule "${rule.name}"`,
       next: rule,
       request,
-    });
+    }));
     return jsonCreated(rule);
   } catch (error) {
     return jsonError(error as Error, request);

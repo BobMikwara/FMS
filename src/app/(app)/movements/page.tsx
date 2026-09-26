@@ -13,8 +13,8 @@ export default async function MovementsPage() {
 
   const from = isoDaysAgo(14);
   const to = new Date().toISOString();
-  const { rows } = listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50 });
-  const totals = movementTotals(user.organizationId, from, to);
+  const { rows } = (await listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50 }));
+  const totals = (await movementTotals(user.organizationId, from, to));
 
   return (
     <div className="space-y-5">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { SessionUser } from "../auth/session";
 import { getCurrentUser, hasPermission } from "../auth/session";
+import { queryOne } from "../db/client";
 import { createAuditLog } from "../db/repo/core";
 
 /**
@@ -109,28 +110,22 @@ export function parsePagination(searchParams: URLSearchParams, defaultPageSize =
 }
 
 /* -------------------------------------------------------------------------- */
-/* Rate limiting (in-memory token bucket)                                     */
+/* Rate limiting (durable and atomic across Vercel instances)                */
 /* -------------------------------------------------------------------------- */
 
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
-
-const buckets = new Map<string, Bucket>();
-
-export function rateLimit(key: string, max: number, windowSeconds: number): void {
+export async function rateLimit(key: string, max: number, windowSeconds: number): Promise<void> {
   const now = Date.now();
-  const bucket = buckets.get(key);
-  if (!bucket || bucket.resetAt < now) {
-    buckets.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
-    if (buckets.size > 5000) {
-      for (const [k, v] of buckets) if (v.resetAt < now) buckets.delete(k);
-    }
-    return;
-  }
-  bucket.count += 1;
-  if (bucket.count > max) throw tooManyRequests();
+  const resetAt = now + windowSeconds * 1000;
+  const row = await queryOne<{ count: number }>(
+    `INSERT INTO rate_limit_buckets (key, count, reset_at)
+     VALUES (?, 1, ?)
+     ON CONFLICT (key) DO UPDATE SET
+       count = CASE WHEN rate_limit_buckets.reset_at <= ? THEN 1 ELSE rate_limit_buckets.count + 1 END,
+       reset_at = CASE WHEN rate_limit_buckets.reset_at <= ? THEN ? ELSE rate_limit_buckets.reset_at END
+     RETURNING count`,
+    [key, resetAt, now, now, resetAt],
+  );
+  if (Number(row?.count ?? 0) > max) throw tooManyRequests();
 }
 
 export function rateLimitConfig() {
@@ -161,7 +156,7 @@ export function withAuth<T>(handler: Handler<T>): WrappedHandler {
       const user = await getCurrentUser();
       if (!user) return jsonError(unauthorized(), request);
       const { max, windowSeconds } = rateLimitConfig();
-      rateLimit(`user:${user.id}`, max, windowSeconds);
+      await rateLimit(`user:${user.id}`, max, windowSeconds);
       const resolved = routeCtx?.params ? await routeCtx.params : undefined;
       const params = (resolved ?? undefined) as Record<string, string> | undefined;
       return await handler(request, { user, params });
@@ -251,7 +246,7 @@ export function maxLen(value: string, max: number, field: string): string {
 /* Audit helper                                                               */
 /* -------------------------------------------------------------------------- */
 
-export function audit(input: {
+export async function audit(input: {
   user: SessionUser;
   action: string;
   entity: string;
@@ -261,7 +256,7 @@ export function audit(input: {
   previous?: unknown;
   next?: unknown;
   request?: Request;
-}): void {
+}): Promise<void> {
   let ip: string | null = null;
   let userAgent: string | null = null;
   if (input.request) {
@@ -271,7 +266,7 @@ export function audit(input: {
       null;
     userAgent = input.request.headers.get("user-agent");
   }
-  createAuditLog({
+  (await createAuditLog({
     userId: input.user.id,
     userLabel: input.user.name,
     action: input.action,
@@ -283,7 +278,7 @@ export function audit(input: {
     next: input.next,
     ip,
     userAgent,
-  });
+  }));
 }
 
 export function clientIp(request: Request): string | null {

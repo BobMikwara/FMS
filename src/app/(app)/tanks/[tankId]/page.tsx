@@ -13,11 +13,16 @@ export const dynamic = "force-dynamic";
 export default async function TankDetailPage({ params }: { params: Promise<{ tankId: string }> }) {
   const { tankId } = await params;
   const user = await getCurrentUser();
-  const tank = getTank(tankId);
-  if (!tank || !user || tank.organizationId !== user.organizationId) notFound();
+  const tank = (await getTank(tankId));
+  if (
+    !tank ||
+    !user ||
+    tank.organizationId !== user.organizationId ||
+    (user.stationIds.length > 0 && !user.stationIds.includes(tank.stationId))
+  ) notFound();
 
-  const station = getStation(tank.stationId);
-  const data = buildTankDetail(tankId);
+  const station = (await getStation(tank.stationId));
+  const data = (await buildTankDetail(tankId));
 
   return (
     <div className="space-y-5">
@@ -129,14 +134,14 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
   );
 }
 
-function fuelTypeName(data: ReturnType<typeof buildTankDetail>) {
+function fuelTypeName(data: Awaited<ReturnType<typeof buildTankDetail>>) {
   return data?.fuelType?.systemName ?? "fuel";
 }
 
-function fuelTypeColor(data: ReturnType<typeof buildTankDetail>) {
+function fuelTypeColor(data: Awaited<ReturnType<typeof buildTankDetail>>) {
   return data?.fuelType?.color ?? "#0f766e";
 }
 
-function fuelTypeLabel(data: ReturnType<typeof buildTankDetail>) {
+function fuelTypeLabel(data: Awaited<ReturnType<typeof buildTankDetail>>) {
   return data?.fuelType?.displayName;
 }

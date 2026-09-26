@@ -11,9 +11,9 @@ export default async function UsersPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const users = listUsers(user.organizationId);
-  const roles = listRoles();
-  const stations = listAllStations(user.organizationId);
+  const users = (await listUsers(user.organizationId));
+  const roles = (await listRoles());
+  const stations = (await listAllStations(user.organizationId));
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
 
   const rows = users.map((entry) => ({

@@ -3,7 +3,7 @@ import { badRequest, clientIp, jsonError, jsonOk, parseJsonBody, rateLimit, unpr
 
 export async function POST(request: Request) {
   try {
-    rateLimit(`reset:${clientIp(request) ?? "unknown"}`, 10, 900);
+    await rateLimit(`reset:${clientIp(request) ?? "unknown"}`, 10, 900);
     const body = await parseJsonBody<{ token?: string; password?: string }>(request);
     if (!body.token || !body.password) {
       return jsonError(unprocessable("A reset token and a new password are required."));

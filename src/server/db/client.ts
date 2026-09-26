@@ -1,102 +1,194 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { DatabaseSync } from "node:sqlite";
 import { readFileSync, mkdirSync, existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import postgres, { type Sql } from "postgres";
 
 /**
- * SQLite engine wrapper.
+ * Database adapter used by the repositories.
  *
- * The platform is written against a thin, driver-agnostic query surface
- * (`query` / `queryOne` / `execute` / `transaction`). Everything above this
- * module is pure SQL + typed row mapping, so moving to PostgreSQL in
- * production only requires re-implementing this one file (the canonical model
- * lives in `docs/ERD.md`).
+ * Production uses Supabase PostgreSQL through its transaction pooler. SQLite is
+ * retained as an optional local-development adapter only. All callers use the
+ * same async API, which is important because PostgreSQL drivers are async and
+ * Vercel functions must not block the event loop while waiting for the pooler.
+ *
+ * The production schema is applied by Supabase migrations. The application
+ * never creates or mutates a production schema during a request.
  */
 
 const ROOT = resolve(process.cwd());
+const DATABASE_URL = process.env.DATABASE_URL ?? "file:./db/smartfuel.db";
+const DB_PROVIDER = process.env.DB_PROVIDER ?? (DATABASE_URL.startsWith("postgres") ? "postgresql" : "sqlite");
+const USE_POSTGRES = DB_PROVIDER === "postgresql" || DATABASE_URL.startsWith("postgres://") || DATABASE_URL.startsWith("postgresql://");
 const DEFAULT_DB_PATH = join(ROOT, "db", "smartfuel.db");
 
+type PostgresConnection = Sql<Record<string, postgres.PostgresType>>;
+
+let sqliteInstance: DatabaseSync | null = null;
+let postgresInstance: PostgresConnection | null = null;
+const transactionStore = new AsyncLocalStorage<PostgresConnection>();
+let schemaReady = false;
+let schemaPromise: Promise<void> | null = null;
+
 function resolveDbPath(): string {
-  const url = process.env.DATABASE_URL ?? "file:./db/smartfuel.db";
+  const url = DATABASE_URL;
   const cleaned = url.replace(/^file:/, "");
   if (cleaned === ":memory:") return ":memory:";
   if (cleaned.startsWith("/")) return cleaned;
-  return join(ROOT, cleaned);
+  return join(ROOT, cleaned || DEFAULT_DB_PATH);
 }
 
-const DB_PATH = resolveDbPath();
-
-let dbInstance: DatabaseSync | null = null;
-let schemaReady = false;
-
-function loadSchema(): string {
-  // Read from disk in dev, fall back to the inlined copy bundled for edge/serverless.
-  const schemaPath = join(ROOT, "db", "schema.sql");
-  if (existsSync(schemaPath)) return readFileSync(schemaPath, "utf8");
-  return BUNDLED_SCHEMA;
-}
-
-export function db(): DatabaseSync {
-  if (dbInstance) return dbInstance;
-  if (DB_PATH !== ":memory:") {
-    const dir = dirname(DB_PATH);
+function sqlite(): DatabaseSync {
+  if (sqliteInstance) return sqliteInstance;
+  const path = resolveDbPath();
+  if (path !== ":memory:") {
+    const dir = dirname(path);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
-  const instance = new DatabaseSync(DB_PATH);
+  const instance = new DatabaseSync(path);
   instance.exec("PRAGMA journal_mode = WAL;");
   instance.exec("PRAGMA foreign_keys = ON;");
   instance.exec("PRAGMA busy_timeout = 5000;");
-  dbInstance = instance;
+  sqliteInstance = instance;
   return instance;
 }
 
-/** Applies the schema if tables are missing. Safe to call repeatedly. */
-export function ensureSchema(): void {
-  if (schemaReady) return;
-  const database = db();
-  const row = database
-    .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='organizations'")
-    .get() as { n: number } | undefined;
-  if (!row || row.n === 0) {
-    database.exec(loadSchema());
+function postgresDb(): PostgresConnection {
+  const transaction = transactionStore.getStore();
+  if (transaction) return transaction;
+  if (postgresInstance) return postgresInstance;
+  if (!DATABASE_URL.startsWith("postgres://") && !DATABASE_URL.startsWith("postgresql://")) {
+    throw new Error("DATABASE_URL must be a PostgreSQL connection string when DB_PROVIDER=postgresql");
   }
-  schemaReady = true;
+  postgresInstance = postgres(DATABASE_URL, {
+    max: 1,
+    prepare: false,
+    ssl: "require",
+    connect_timeout: 10,
+    idle_timeout: 20,
+    connection: { application_name: "smartfuel-vercel" },
+  });
+  return postgresInstance;
+}
+
+function loadSqliteSchema(): string {
+  const schemaPath = join(ROOT, "db", "schema.sqlite.sql");
+  if (existsSync(schemaPath)) return readFileSync(schemaPath, "utf8");
+  return "";
+}
+
+/**
+ * Converts the repository's simple positional placeholders to PostgreSQL
+ * placeholders. Repository SQL does not contain literal question marks, so a
+ * deliberately small translator keeps the repository code readable while the
+ * PostgreSQL adapter remains parameterised.
+ */
+type PostgresParameter = null | string | number | boolean | Date | Uint8Array | readonly PostgresParameter[];
+
+function postgresParameters(params: unknown[]): PostgresParameter[] {
+  return params.map((value): PostgresParameter => {
+    if (value == null) return null;
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value instanceof Date || value instanceof Uint8Array) {
+      return value;
+    }
+    if (Array.isArray(value)) return value.map((item) => postgresParameters([item])[0]);
+    return JSON.stringify(value);
+  });
+}
+
+function postgresSql(sql: string): string {
+  const pgNow = `to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+  const pgSevenDaysAgo = `to_char((CURRENT_TIMESTAMP - INTERVAL '7 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
+  let translated = sql
+    .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now','-7 days'\)/g, pgSevenDaysAgo)
+    .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now'\)/g, pgNow)
+    .replace(/strftime\('%Y-%m-%dT%H:00',\s*([a-zA-Z0-9_.]+)\)/g, "to_char(date_trunc('hour', $1::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:00')")
+    .replace(/strftime\('%Y-%m-%d',\s*([a-zA-Z0-9_.]+)\)/g, "to_char($1::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')");
+  let index = 0;
+  return translated.replace(/\?/g, () => `$${++index}`);
+}
+
+/** Applies the local SQLite schema only. Supabase schema is migration-owned. */
+export async function ensureSchema(): Promise<void> {
+  if (USE_POSTGRES || schemaReady) return;
+  if (!schemaPromise) {
+    schemaPromise = Promise.resolve().then(() => {
+      const database = sqlite();
+      const row = database
+        .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='organizations'")
+        .get() as { n: number } | undefined;
+      if (!row || row.n === 0) {
+        database.exec(loadSqliteSchema());
+      } else {
+        database.exec(`
+          CREATE TABLE IF NOT EXISTS rate_limit_buckets (
+            key TEXT PRIMARY KEY,
+            count INTEGER NOT NULL,
+            reset_at INTEGER NOT NULL
+          );
+          CREATE INDEX IF NOT EXISTS idx_rate_limit_reset_at ON rate_limit_buckets(reset_at);
+        `);
+      }
+      schemaReady = true;
+    });
+  }
+  await schemaPromise;
 }
 
 export type Row = Record<string, unknown>;
 
-export function query<T = Row>(sql: string, params: unknown[] = []): T[] {
-  ensureSchema();
-  const stmt = db().prepare(sql);
+export async function query<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
+  await ensureSchema();
+  if (USE_POSTGRES) return (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
+  const stmt = sqlite().prepare(sql);
   return stmt.all(...(params as never[])) as T[];
 }
 
-export function queryOne<T = Row>(sql: string, params: unknown[] = []): T | null {
-  ensureSchema();
-  const stmt = db().prepare(sql);
+export async function queryOne<T = Row>(sql: string, params: unknown[] = []): Promise<T | null> {
+  await ensureSchema();
+  if (USE_POSTGRES) {
+    const rows = (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
+    return rows[0] ?? null;
+  }
+  const stmt = sqlite().prepare(sql);
   const row = stmt.get(...(params as never[])) as T | undefined;
   return row ?? null;
 }
 
-export function execute(sql: string, params: unknown[] = []): { changes: number; lastInsertRowid: number | bigint } {
-  ensureSchema();
-  const stmt = db().prepare(sql);
+export async function execute(
+  sql: string,
+  params: unknown[] = [],
+): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
+  await ensureSchema();
+  if (USE_POSTGRES) {
+    const result = await postgresDb().unsafe(postgresSql(sql), postgresParameters(params));
+    return { changes: Number(result.count ?? 0), lastInsertRowid: 0 };
+  }
+  const stmt = sqlite().prepare(sql);
   const result = stmt.run(...(params as never[]));
   return { changes: Number(result.changes), lastInsertRowid: result.lastInsertRowid };
 }
 
-export function exec(sql: string): void {
-  ensureSchema();
-  db().exec(sql);
+export async function exec(sql: string): Promise<void> {
+  await ensureSchema();
+  if (USE_POSTGRES) {
+    await postgresDb().unsafe(sql);
+    return;
+  }
+  sqlite().exec(sql);
 }
 
-/** Runs `fn` inside a transaction, rolling back on any thrown error. */
-export function transaction<T>(fn: () => T): T {
-  ensureSchema();
-  const database = db();
+/** Runs an async callback inside a transaction. Repository calls inherit the transaction connection. */
+export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
+  await ensureSchema();
+  if (USE_POSTGRES) {
+    return (await postgresDb().begin(async (tx) => transactionStore.run(tx as unknown as PostgresConnection, fn))) as T;
+  }
+  const database = sqlite();
   database.exec("BEGIN");
   try {
-    const result = fn();
+    const result = await fn();
     database.exec("COMMIT");
     return result;
   } catch (error) {
@@ -109,26 +201,48 @@ export function transaction<T>(fn: () => T): T {
   }
 }
 
-/** Bulk insert helper — chunks to keep statements and memory bounded. */
-export function insertMany(
+/** Bulk insert helper. PostgreSQL receives one parameterised statement. */
+export async function insertMany(
   table: string,
   columns: string[],
   rows: unknown[][],
   chunkSize = 200,
-): number {
+): Promise<number> {
   if (rows.length === 0) return 0;
-  ensureSchema();
-  const database = db();
+  await ensureSchema();
+  const insertedRows = rows.slice(0, rows.length);
+  if (USE_POSTGRES) {
+    let inserted = 0;
+    for (let offset = 0; offset < insertedRows.length; offset += chunkSize) {
+      const chunk = insertedRows.slice(offset, offset + chunkSize);
+      const values: unknown[] = [];
+      const safeTuples = chunk.map((row) => {
+        const placeholders = row.map((value) => `$${values.push(value)}`).join(", ");
+        return `(${placeholders})`;
+      });
+      await postgresDb().unsafe(
+        `INSERT INTO ${safeIdentifier(table)} (${columns.map(safeIdentifier).join(", ")}) VALUES ${safeTuples.join(", ")}`,
+        postgresParameters(values),
+      );
+      inserted += chunk.length;
+    }
+    return inserted;
+  }
+
+  const database = sqlite();
   const placeholders = columns.map(() => "?").join(", ");
-  const sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${placeholders})`;
-  const stmt = database.prepare(sql);
+  const statement = database.prepare(`INSERT INTO ${safeIdentifier(table)} (${columns.map(safeIdentifier).join(", ")}) VALUES (${placeholders})`);
   let inserted = 0;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
-    for (const row of chunk) stmt.run(...(row as never[]));
-    inserted += chunk.length;
+  for (let i = 0; i < insertedRows.length; i += chunkSize) {
+    for (const row of insertedRows.slice(i, i + chunkSize)) statement.run(...(row as never[]));
+    inserted += Math.min(chunkSize, insertedRows.length - i);
   }
   return inserted;
+}
+
+function safeIdentifier(value: string): string {
+  if (!/^[a-z_][a-z0-9_]*$/i.test(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
+  return value;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -150,7 +264,6 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
-/** ISO string without milliseconds — matches SQLite's strftime('%Y-%m-%dT%H:%M:%SZ','now') format. */
 export function isoNow(): string {
   return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
@@ -164,7 +277,6 @@ export function toIso(value: unknown): string | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
-/** Normalises a stored ISO string into a JS Date. */
 export function fromIso(value: unknown): Date | null {
   if (value == null) return null;
   const parsed = new Date(String(value));
@@ -172,21 +284,10 @@ export function fromIso(value: unknown): Date | null {
 }
 
 export const boolToInt = (v: boolean | undefined | null): number => (v ? 1 : 0);
-export const intToBool = (v: unknown): boolean => Number(v) === 1;
+export const intToBool = (v: unknown): boolean => Number(v) === 1 || v === true;
 
-/** SQLite epoch helpers for range queries on ISO-8601 UTC text columns. */
 export function isoDaysAgo(days: number): string {
   return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
-// The schema is inlined so the module keeps working if the process is started
-// from a different working directory (e.g. `next start` in production).
-const BUNDLED_SCHEMA = readFileSyncSafe();
-
-function readFileSyncSafe(): string {
-  try {
-    return readFileSync(join(ROOT, "db", "schema.sql"), "utf8");
-  } catch {
-    return "";
-  }
-}
+export { USE_POSTGRES };

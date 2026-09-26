@@ -15,10 +15,10 @@ export default async function MapPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const dashboard = buildDashboard(user.organizationId, "7d");
-  const stations = listAllStations(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
-  const vehicles = listAllVehicles(user.organizationId);
+  const dashboard = (await buildDashboard(user.organizationId, "7d", user.stationIds));
+  const stations = (await listAllStations(user.organizationId));
+  const tanks = (await listAllTanks(user.organizationId));
+  const vehicles = (await listAllVehicles(user.organizationId));
 
   const stationSummary = new Map(dashboard.stations.map((entry) => [entry.station.id, entry]));
 

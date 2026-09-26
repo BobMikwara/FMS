@@ -14,11 +14,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   let alertCount = 0;
   let unread = 0;
   try {
-    ensureSchema();
+    (await ensureSchema());
     alertCount = hasPermission(user, "alerts.view")
-      ? listAlerts({ orgId: user.organizationId, status: "active", pageSize: 200 }).total
+      ? (await listAlerts({ orgId: user.organizationId, status: "active", pageSize: 200 })).total
       : 0;
-    unread = countUnreadNotifications(user.organizationId);
+    unread = (await countUnreadNotifications(user.organizationId, user.id));
   } catch (error) {
     console.error("[layout] failed to load shell counters", error);
   }

@@ -14,15 +14,19 @@ export const dynamic = "force-dynamic";
 export const GET = withPermission("readings.view", async (request, ctx) => {
   try {
     const tankId = ctx.params?.tankId ?? "";
-    const tank = getTank(tankId);
-    if (!tank || tank.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
+    const tank = (await getTank(tankId));
+    if (
+      !tank ||
+      tank.organizationId !== ctx.user.organizationId ||
+      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+    ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;
     const from = params.get("from") ?? isoDaysAgo(1);
     const to = params.get("to") ?? new Date().toISOString();
 
     if (params.get("series") === "true") {
-      const rows = readingsForTank(tankId, from, to, 5000);
+      const rows = (await readingsForTank(tankId, from, to, 5000));
       const stride = Math.max(1, Math.ceil(rows.length / 600));
       const sampled = rows.filter((_, index) => index % stride === 0 || index === rows.length - 1);
       return jsonOk({
@@ -45,13 +49,13 @@ export const GET = withPermission("readings.view", async (request, ctx) => {
     }
 
     const { page, pageSize } = parsePagination(params, 50, 500);
-    const result = listReadings({ orgId: ctx.user.organizationId, tankId, from, to, page, pageSize });
+    const result = (await listReadings({ orgId: ctx.user.organizationId, tankId, from, to, page, pageSize }));
     return jsonOk({
       rows: result.rows,
       total: result.total,
       page,
       pageSize,
-      latest: latestReadingForTank(tankId),
+      latest: (await latestReadingForTank(tankId)),
     });
   } catch (error) {
     return jsonError(error as Error, request);

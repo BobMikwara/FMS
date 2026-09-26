@@ -74,7 +74,7 @@ function ensureSchema(database) {
     .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='organizations'")
     .get();
   if (row && row.n > 0) return;
-  database.exec(readFileSync(join(ROOT, "db", "schema.sql"), "utf8"));
+  database.exec(readFileSync(join(ROOT, "db", "schema.sqlite.sql"), "utf8"));
 }
 
 /* -------------------------------------------------------------------------- */

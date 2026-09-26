@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const PATCH = withPermission("reports.schedule", async (request, ctx) => {
   try {
     const scheduledId = ctx.params?.scheduledId ?? "";
-    const existing = getScheduledReport(scheduledId);
+    const existing = (await getScheduledReport(scheduledId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
     const body = await parseJsonBody<Record<string, unknown>>(request);
     const patch: Record<string, unknown> = {};
@@ -26,9 +26,9 @@ export const PATCH = withPermission("reports.schedule", async (request, ctx) => 
     ]) {
       if (body[key] !== undefined) patch[key] = body[key];
     }
-    const scheduled = updateScheduledReport(scheduledId, patch);
+    const scheduled = (await updateScheduledReport(scheduledId, patch));
     if (!scheduled) return jsonError(notFound(), request);
-    audit({
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "scheduled_report",
@@ -38,7 +38,7 @@ export const PATCH = withPermission("reports.schedule", async (request, ctx) => 
       previous: existing,
       next: scheduled,
       request,
-    });
+    }));
     return jsonOk(scheduled);
   } catch (error) {
     return jsonError(error as Error, request);
@@ -48,10 +48,10 @@ export const PATCH = withPermission("reports.schedule", async (request, ctx) => 
 export const DELETE = withPermission("reports.schedule", async (request, ctx) => {
   try {
     const scheduledId = ctx.params?.scheduledId ?? "";
-    const existing = getScheduledReport(scheduledId);
+    const existing = (await getScheduledReport(scheduledId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
-    deleteScheduledReport(scheduledId);
-    audit({
+    (await deleteScheduledReport(scheduledId));
+    (await audit({
       user: ctx.user,
       action: "deleted",
       entity: "scheduled_report",
@@ -60,7 +60,7 @@ export const DELETE = withPermission("reports.schedule", async (request, ctx) =>
       summary: `${ctx.user.name} deleted scheduled report "${existing.name}"`,
       previous: existing,
       request,
-    });
+    }));
     return jsonOk({ id: scheduledId, deleted: true });
   } catch (error) {
     return jsonError(error as Error, request);

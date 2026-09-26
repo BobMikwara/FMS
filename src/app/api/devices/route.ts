@@ -19,7 +19,7 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 24);
-    const result = listDevices({
+    const result = (await listDevices({
       orgId: ctx.user.organizationId,
       type: params.get("type") ?? undefined,
       status: params.get("status") ?? undefined,
@@ -33,10 +33,11 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
       order: (params.get("order") as "asc" | "desc") ?? "asc",
       page,
       pageSize,
-    });
-    const stations = listAllStations(ctx.user.organizationId);
-    const tanks = listAllTanks(ctx.user.organizationId);
-    const vehicles = listAllVehicles(ctx.user.organizationId);
+      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+    }));
+    const stations = (await listAllStations(ctx.user.organizationId));
+    const tanks = (await listAllTanks(ctx.user.organizationId));
+    const vehicles = (await listAllVehicles(ctx.user.organizationId));
     const stationName = new Map(stations.map((station) => [station.id, station.name]));
     const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
     const vehicleName = new Map(vehicles.map((vehicle) => [vehicle.id, `${vehicle.name} (${vehicle.plateNumber})`]));
@@ -58,16 +59,44 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
     const serialNumber = maxLen(required(body.serialNumber, "Serial number"), 64, "Serial number");
     const type = str(body.type, "fuel_probe") as "fuel_probe" | "gps_tracker";
     const orgId = ctx.user.organizationId;
+    const stations = await listAllStations(orgId);
+    const tanks = await listAllTanks(orgId);
+    const vehicles = await listAllVehicles(orgId);
+    const stationId = str(body.stationId);
+    const tankId = str(body.tankId);
+    const vehicleId = str(body.vehicleId);
+    if (stationId && !stations.some((station) => station.id === stationId)) {
+      throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
+    }
+    if (stationId && ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(stationId)) {
+      throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
+    }
+    if (tankId && !tanks.some((tank) => tank.id === tankId)) {
+      throw new ApiError(422, "The selected tank does not exist in your organization.", "validation_error");
+    }
+    if (vehicleId && !vehicles.some((vehicle) => vehicle.id === vehicleId)) {
+      throw new ApiError(422, "The selected vehicle does not exist in your organization.", "validation_error");
+    }
+    if (ctx.user.stationIds.length > 0 && tankId) {
+      const tank = tanks.find((candidate) => candidate.id === tankId);
+      if (!tank || !ctx.user.stationIds.includes(tank.stationId)) {
+        throw new ApiError(403, "You are not scoped to the selected tank's station.", "forbidden");
+      }
+    }
+    if (ctx.user.stationIds.length > 0 && vehicleId) {
+      const vehicle = vehicles.find((candidate) => candidate.id === vehicleId);
+      if (!vehicle || !vehicle.stationId || !ctx.user.stationIds.includes(vehicle.stationId)) {
+        throw new ApiError(403, "You are not scoped to the selected vehicle's station.", "forbidden");
+      }
+    }
 
     if (type === "fuel_probe") {
-      const tankId = str(body.tankId);
       if (!tankId) {
         throw new ApiError(422, "A fuel probe must be assigned to a tank.", "validation_error");
       }
-      const tanks = listAllTanks(orgId);
       const tank = tanks.find((row) => row.id === tankId);
       if (!tank) throw new ApiError(422, "The selected tank does not exist.", "validation_error");
-      const devices = listDevices({ orgId, tankId, pageSize: 100 }).rows;
+      const devices = (await listDevices({ orgId, tankId, pageSize: 100 })).rows;
       if (devices.some((device) => device.type === "fuel_probe")) {
         throw new ApiError(409, `${tank.name} already has a fuel probe assigned.`, "conflict");
       }
@@ -83,7 +112,7 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
   const apiKey = newDeviceApiKey();
   let device!: Device;
   try {
-    device = createDevice({
+    device = (await createDevice({
       organizationId: orgId,
       type,
       serialNumber,
@@ -95,11 +124,11 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
       tankId: str(body.tankId) || null,
       vehicleId: str(body.vehicleId) || null,
       apiKeyHash: hashDeviceKey(apiKey),
-    });
+    }));
   } catch (error) {
     uniqueViolation(error, "A device with this serial number", "serial number");
   }
-    audit({
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "device",
@@ -108,7 +137,7 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
       summary: `${ctx.user.name} registered device ${device.serialNumber}`,
       next: device,
       request,
-    });
+    }));
     return jsonCreated({ ...device, apiKey });
   } catch (error) {
     return jsonError(error as Error, request);

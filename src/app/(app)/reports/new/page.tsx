@@ -12,8 +12,8 @@ export default async function NewReportPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const stations = listAllStations(user.organizationId);
-  const fuelTypes = listFuelTypes(user.organizationId);
+  const stations = (await listAllStations(user.organizationId));
+  const fuelTypes = (await listFuelTypes(user.organizationId));
   const now = new Date().toISOString();
 
   return (

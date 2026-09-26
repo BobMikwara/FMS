@@ -28,8 +28,9 @@ export function NotificationCenter({ unreadCount }: { unreadCount: number }) {
       const response = await fetch("/api/notifications");
       const payload = await response.json();
       if (payload.ok) {
-        setItems(payload.data);
-        setUnread(payload.data.filter((item: NotificationItem) => !item.isRead).length);
+        const data = payload.data as { rows?: NotificationItem[]; unread?: number };
+        setItems(data.rows ?? []);
+        setUnread(Number(data.unread ?? data.rows?.filter((item) => !item.isRead).length ?? 0));
       }
     } catch {
       /* keep previous state */
@@ -58,27 +59,13 @@ export function NotificationCenter({ unreadCount }: { unreadCount: number }) {
     };
   }, [open]);
 
-  // Subscribe to the realtime stream so the badge updates without a refresh.
+  // Notifications are durable rows, so polling is safe across Vercel instances
+  // and does not depend on a long-lived process-local EventSource connection.
   useEffect(() => {
-    if (typeof EventSource === "undefined") return;
-    const source = new EventSource("/api/stream");
-    const onMessage = (event: MessageEvent) => {
-      try {
-        const payload = JSON.parse(event.data);
-        if (payload?.type === "notification") {
-          setUnread((count) => count + 1);
-          if (open) void load();
-        }
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-    source.addEventListener("message", onMessage);
-    return () => {
-      source.removeEventListener("message", onMessage);
-      source.close();
-    };
-  }, [open]);
+    const refresh = () => void load();
+    const timer = window.setInterval(refresh, 15000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const markAllRead = async () => {
     await fetch("/api/notifications", { method: "POST" });

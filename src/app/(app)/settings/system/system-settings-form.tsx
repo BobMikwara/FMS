@@ -155,14 +155,14 @@ export function SystemSettingsForm({
 
         {form.simulatorEnabled ? (
           <div className="mt-4">
-            <Notice tone="warn" title="Simulated probe traffic is enabled">
+            <Notice tone="warn" title="Demo simulator is available">
               <span className="flex items-start gap-2">
                 <Info size={14} className="mt-0.5 shrink-0" />
                 <span>
-                  This instance is generating synthetic readings so the platform can be explored without hardware. Every
-                  screen that shows simulated data is labelled as such. Set{" "}
-                  <code className="rounded bg-[var(--surface-3)] px-1 py-0.5">DEMO_SIMULATOR=off</code> and connect a real
-                  probe to switch to live data.
+                  Synthetic readings are available only through an explicit local/demo simulator run; Vercel never starts a
+                  background worker for them. Every screen that shows simulated data is labelled as such. Keep{" "}
+                  <code className="rounded bg-[var(--surface-3)] px-1 py-0.5">DEMO_SIMULATOR=off</code> in production and
+                  connect a real probe for live data.
                 </span>
               </span>
             </Notice>

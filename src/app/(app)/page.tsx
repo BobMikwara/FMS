@@ -16,7 +16,7 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const data = buildDashboard(user.organizationId, "7d");
+  const data = (await buildDashboard(user.organizationId, "7d", user.stationIds));
   const { kpis, charts, alerts, recentMovements, lowTanks, deviceHealth, stations } = data;
 
   const greeting = greetingForHour(new Date().getHours());
