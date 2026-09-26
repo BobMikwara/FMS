@@ -136,10 +136,10 @@ SELECT
   CASE WHEN f.start_level < 0.2 THEN 'low' ELSE 'normal' END
 FROM stations s
 CROSS JOIN (VALUES
-  ('petrol', 50000::REAL, 0.58::REAL),
-  ('diesel', 40000::REAL, 0.64::REAL),
-  ('kerosene', 15000::REAL, 0.46::REAL)
-) AS f(system_name, capacity, start_level)
+  ('petrol', 'Unleaded Petrol 95', 50000::REAL, 0.58::REAL),
+  ('diesel', 'Automotive Diesel 50ppm', 40000::REAL, 0.64::REAL),
+  ('kerosene', 'Illuminating Kerosene', 15000::REAL, 0.46::REAL)
+) AS f(system_name, display_name, capacity, start_level)
 WHERE s.organization_id IN ('org_puma_tz', 'org_total_tz')
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
