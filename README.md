@@ -119,7 +119,7 @@ creates production tables during a request.
    `DATABASE_URL`, a long random `AUTH_SECRET`, the public `AUTH_URL`, and the SMTP variables
    documented in [`.env.example`](./.env.example). Set `CRON_SECRET` as a Vercel secret, keep
    `DEMO_SIMULATOR=off`, and do not expose Supabase service-role credentials to the browser.
-5. Deploy with the committed `vercel.json`. Its five-minute Cron invokes
+5. Deploy with the committed `vercel.json`. Its daily Cron invokes
    `/api/cron/maintenance` to sweep stale devices across all active organizations. The runtime
    PostgreSQL client uses a small pool,
    disables prepared statements for transaction pooling, and requires TLS. Rate-limit buckets
