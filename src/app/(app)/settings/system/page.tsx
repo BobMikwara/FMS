@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 const ENV_KEYS = [
   { key: "DATABASE_URL", label: "Database", hint: "SQLite file path or PostgreSQL connection string" },
-  { key: "AUTH_SECRET", label: "Auth secret", hint: "Signs session JWTs — must be long and random" },
+  { key: "AUTH_SECRET", label: "Auth secret", hint: "Signs session JWTs - must be long and random" },
   { key: "AUTH_URL", label: "Auth URL", hint: "Public origin used in password reset links" },
   { key: "REALTIME_TRANSPORT", label: "Realtime transport", hint: "sse or polling" },
   { key: "DEMO_SIMULATOR", label: "Demo simulator", hint: "on permits explicit local/demo simulator runs" },

@@ -123,10 +123,11 @@ export function AlertsBrowser({
 
   const columns: Column<AlertRow>[] = useMemo(
     () => [
-      { key: "severity", header: "Severity", cell: (row) => <AlertSeverityBadge severity={row.severity} /> },
+      { key: "severity", header: "Severity", width: "8%", cell: (row) => <AlertSeverityBadge severity={row.severity} /> },
       {
         key: "title",
         header: "Alert",
+        width: "29%",
         cell: (row) => (
           <div className="min-w-0 max-w-[26rem]">
             <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{row.title}</p>
@@ -142,6 +143,7 @@ export function AlertsBrowser({
       {
         key: "location",
         header: "Location",
+        width: "17%",
         hideOnMobile: true,
         cell: (row) => (
           <div>
@@ -159,6 +161,7 @@ export function AlertsBrowser({
       {
         key: "createdAt",
         header: "Raised",
+        width: "13%",
         hideOnMobile: true,
         cell: (row) => (
           <div>
@@ -167,10 +170,11 @@ export function AlertsBrowser({
           </div>
         ),
       },
-      { key: "status", header: "Status", cell: (row) => <AlertStatusBadge status={row.status} /> },
+      { key: "status", header: "Status", width: "11%", cell: (row) => <AlertStatusBadge status={row.status} /> },
       {
         key: "actions",
         header: "",
+        width: "22%",
         cell: (row) => (
           <div className="flex items-center justify-end gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
@@ -272,6 +276,38 @@ export function AlertsBrowser({
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
+          mobileCard={(row) => (
+            <article className="space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[0.8125rem] font-medium text-[var(--ink)]">{row.title}</p>
+                  <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">{row.message}</p>
+                </div>
+                <AlertSeverityBadge severity={row.severity} />
+              </div>
+              <div className="flex flex-wrap items-center gap-2 text-[0.6875rem] text-[var(--ink-3)]">
+                <AlertStatusBadge status={row.status} />
+                <span>{row.stationName ?? "Unknown station"}</span>
+                {row.tankName ? <span>{row.tankName}</span> : null}
+                <span>{timeAgo(row.createdAt)}</span>
+              </div>
+              <div className="flex flex-wrap justify-end gap-1.5">
+                <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
+                  Note
+                </Button>
+                {row.status === "active" ? (
+                  <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
+                    Acknowledge
+                  </Button>
+                ) : null}
+                {row.status !== "resolved" ? (
+                  <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
+                    Resolve
+                  </Button>
+                ) : null}
+              </div>
+            </article>
+          )}
           loading={query.loading}
           total={query.total}
           page={query.page}
@@ -289,7 +325,7 @@ export function AlertsBrowser({
         open={Boolean(resolveTarget)}
         onClose={() => setResolveTarget(null)}
         title="Resolve alert"
-        description={`${resolveTarget?.title ?? ""} — add a note so the next operator understands what happened.`}
+        description={`${resolveTarget?.title ?? ""} - add a note so the next operator understands what happened.`}
         footer={
           <>
             <Button variant="secondary" onClick={() => setResolveTarget(null)}>

@@ -210,7 +210,7 @@ export function FuelTypesBrowser({ initialRows }: { initialRows: FuelTypeRow[] }
         open={open}
         onClose={close}
         title={creating ? "Add fuel type" : "Edit fuel type"}
-        description="Density converts probe height into volume — use the value from your supplier's certificate of analysis."
+        description="Density converts probe height into volume - use the value from your supplier's certificate of analysis."
         footer={
           <>
             <Button variant="secondary" onClick={close}>

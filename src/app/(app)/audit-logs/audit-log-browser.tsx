@@ -98,7 +98,7 @@ export function AuditLogBrowser({ initialRows }: { initialRows: AuditRow[] }) {
           row.metadata ? (
             <span className="line-clamp-2 max-w-md text-[0.75rem] leading-relaxed text-[var(--ink-2)]">{row.metadata}</span>
           ) : (
-            <span className="text-[0.75rem] text-[var(--ink-3)]">—</span>
+            <span className="text-[0.75rem] text-[var(--ink-3)]">-</span>
           ),
       },
     ],

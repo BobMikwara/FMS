@@ -297,7 +297,7 @@ export function UsersBrowser({
         open={Boolean(editTarget)}
         onClose={() => setEditTarget(null)}
         title="Edit user"
-        description={`${editTarget?.email ?? ""} — changes take effect on their next request.`}
+        description={`${editTarget?.email ?? ""} - changes take effect on their next request.`}
         size="lg"
         footer={
           <>

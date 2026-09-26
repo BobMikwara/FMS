@@ -13,6 +13,7 @@ import type { StatusTone } from "@/lib/status";
 const toneClass: Record<StatusTone, string> = {
   ok: "badge-ok",
   warn: "badge-warn",
+  brown: "badge-brown",
   crit: "badge-crit",
   info: "badge-info",
   idle: "badge-idle",
@@ -22,6 +23,7 @@ const toneClass: Record<StatusTone, string> = {
 const dotColor: Record<StatusTone, string> = {
   ok: "var(--ok)",
   warn: "var(--warn)",
+  brown: "var(--tank-low)",
   crit: "var(--crit)",
   info: "var(--info)",
   idle: "var(--idle)",
@@ -64,7 +66,7 @@ export function StatusDot({ tone, pulse, className, label }: StatusDotProps) {
   );
 }
 
-/** Status chip that always pairs colour with text — never colour alone. */
+/** Status chip that always pairs colour with text - never colour alone. */
 export function StatusBadge({
   tone,
   children,
@@ -214,7 +216,7 @@ export interface ErrorStateProps {
 
 export function ErrorState({
   title = "Unable to load this data",
-  message = "The monitoring service is temporarily unavailable. Your data is safe — please try again.",
+  message = "The monitoring service is temporarily unavailable. Your data is safe - please try again.",
   onRetry,
   retryLabel = "Try again",
   className,

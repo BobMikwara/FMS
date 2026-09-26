@@ -206,7 +206,7 @@ export function StatCard({
     </>
   );
 
-  const shellClass = cn("card card-hover kpi block w-full text-left", interactive && "cursor-pointer", className);
+  const shellClass = cn("card card-hover kpi block w-full p-4 text-left sm:p-5", interactive && "cursor-pointer", className);
 
   if (href) {
     return (

@@ -181,7 +181,7 @@ export function NetworkMap({
         <rect width={width} height={height} fill="url(#map-glow)" />
         <rect width={width} height={height} fill="url(#map-grid)" />
 
-        {/* Connections between nearby stations — purely a visual grouping aid. */}
+        {/* Connections between nearby stations - purely a visual grouping aid. */}
         {projected.map((a, index) =>
           projected.slice(index + 1).map((b) => {
             const distance = Math.hypot(a.x - b.x, a.y - b.y);
@@ -292,7 +292,7 @@ export function NetworkMap({
         ))}
       </svg>
 
-      {/* Legend — never colour alone (PRD accessibility requirement). */}
+      {/* Legend - never colour alone (PRD accessibility requirement). */}
       <div className="pointer-events-none absolute left-3 top-3 flex flex-wrap gap-x-4 gap-y-1.5 rounded-xl border border-[var(--line)] bg-[var(--surface)]/95 px-3 py-2 backdrop-blur">
         {(["online", "offline", "maintenance", "archived"] as const).map((status) => (
           <span key={status} className="flex items-center gap-1.5 text-[0.6875rem] text-[var(--ink-2)]">

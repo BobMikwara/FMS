@@ -113,7 +113,7 @@ export function SystemSettingsForm({
           <Field
             label="Reconciliation variance threshold (%)"
             htmlFor="sys-variance"
-            hint="Variance beyond this raises a reconciliation alert — never an automatic theft claim."
+            hint="Variance beyond this raises a reconciliation alert - never an automatic theft claim."
           >
             <Input
               id="sys-variance"
@@ -147,7 +147,7 @@ export function SystemSettingsForm({
             <dt className="text-[0.6875rem] uppercase tracking-wide text-[var(--ink-3)]">Demo simulator</dt>
             <dd className="mt-1">
               <span className={`badge ${form.simulatorEnabled ? "badge-warn" : "badge-ok"}`}>
-                {form.simulatorEnabled ? "on — synthetic traffic" : "off — live data only"}
+                {form.simulatorEnabled ? "on - synthetic traffic" : "off - live data only"}
               </span>
             </dd>
           </div>

@@ -53,7 +53,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
         <EmptyState
           icon="tank"
           title="No readings available yet"
-          description={`${tank.name} has not reported any probe readings, so no volume, temperature or water data can be shown. This is expected for a newly installed tank — readings will appear as soon as the device connects.`}
+          description={`${tank.name} has not reported any probe readings, so no volume, temperature or water data can be shown. This is expected for a newly installed tank - readings will appear as soon as the device connects.`}
           action={
             <Link href="/devices" className="btn btn-primary">
               Check device status
@@ -63,7 +63,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
       ) : (
         <TankDetailClient
           // `node:sqlite` returns rows with a null prototype, which cannot cross
-          // the server/client boundary — round-trip through JSON first.
+          // the server/client boundary - round-trip through JSON first.
           {...(JSON.parse(JSON.stringify({ tank: data.tank, station: data.station, fuelType: data.fuelType, device: data.device })) as {
             tank: typeof data.tank;
             station: typeof data.station;
@@ -96,15 +96,27 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { label: "Full", range: "85 – 100%", tone: "ok" as const },
-            { label: "Normal", range: "30 – 84%", tone: "info" as const },
-            { label: "Low", range: `15 – ${Math.max(14, tank.lowThresholdPct - 1)}%`, tone: "warn" as const },
-            { label: "Critical", range: `< ${tank.criticalThresholdPct}%`, tone: "crit" as const },
+            { label: "Full", range: "85 - 100%", color: "#16a34a" },
+            { label: "Normal", range: `${tank.lowThresholdPct} - <85%`, color: "#2563eb" },
+            { label: "Low", range: `${tank.criticalThresholdPct} - <${tank.lowThresholdPct}%`, color: "#a16207" },
+            { label: "Critical", range: `< ${tank.criticalThresholdPct}%`, color: "#dc2626" },
           ].map((row) => (
             <div key={row.label} className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3.5 py-3">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[0.75rem] font-medium text-[var(--ink)]">{row.label}</span>
-                <Badge tone={row.tone}>{row.range}</Badge>
+                <span className="flex min-w-0 items-center gap-2 text-[0.75rem] font-medium text-[var(--ink)]">
+                  <span className="h-2 w-2 flex-none rounded-full" style={{ background: row.color }} aria-hidden="true" />
+                  {row.label}
+                </span>
+                <span
+                  className="rounded-full border px-2 py-0.5 text-[0.6875rem] font-semibold"
+                  style={{
+                    color: row.color,
+                    backgroundColor: `${row.color}18`,
+                    borderColor: `${row.color}45`,
+                  }}
+                >
+                  {row.range}
+                </span>
               </div>
             </div>
           ))}
@@ -124,6 +136,8 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
             volume={data?.tank.currentVolume ?? 0}
             capacity={tank.capacity}
             status={data?.status ?? "normal"}
+            lowThresholdPct={tank.lowThresholdPct}
+            criticalThresholdPct={tank.criticalThresholdPct}
             dataState={data?.dataState ?? "offline"}
             size="lg"
             showHeader={false}

@@ -12,19 +12,19 @@ export function cn(...inputs: ClassValue[]) {
 const nf = (opts: Intl.NumberFormatOptions) => new Intl.NumberFormat("en-US", opts);
 
 export function formatNumber(value: number | null | undefined, digits = 0): string {
-  if (value == null || Number.isNaN(value)) return "—";
+  if (value == null || Number.isNaN(value)) return "-";
   return nf({ minimumFractionDigits: digits, maximumFractionDigits: digits }).format(value);
 }
 
 /** Volume in liters, rendered as `38,420 L`. */
 export function formatVolume(liters: number | null | undefined, digits = 0): string {
-  if (liters == null || Number.isNaN(liters)) return "—";
+  if (liters == null || Number.isNaN(liters)) return "-";
   return `${nf({ minimumFractionDigits: digits, maximumFractionDigits: digits }).format(liters)} L`;
 }
 
 /** Compact volume for KPI tiles: `486.2k L`. */
 export function formatCompactVolume(liters: number | null | undefined): string {
-  if (liters == null || Number.isNaN(liters)) return "—";
+  if (liters == null || Number.isNaN(liters)) return "-";
   const abs = Math.abs(liters);
   if (abs >= 1_000_000) return `${(liters / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M L`;
   if (abs >= 10_000) return `${(liters / 1000).toFixed(abs >= 100_000 ? 0 : 1)}k L`;
@@ -32,7 +32,7 @@ export function formatCompactVolume(liters: number | null | undefined): string {
 }
 
 export function formatPercent(value: number | null | undefined, digits = 1): string {
-  if (value == null || Number.isNaN(value)) return "—";
+  if (value == null || Number.isNaN(value)) return "-";
   return `${value.toFixed(digits)}%`;
 }
 
@@ -44,17 +44,17 @@ export function formatSigned(value: number, digits = 0): string {
 }
 
 export function formatCurrency(value: number | null | undefined, currency = "TZS"): string {
-  if (value == null || Number.isNaN(value)) return "—";
+  if (value == null || Number.isNaN(value)) return "-";
   return `${nf({ maximumFractionDigits: 0 }).format(value)} ${currency}`;
 }
 
 export function formatTemperature(celsius: number | null | undefined): string {
-  if (celsius == null || Number.isNaN(celsius)) return "—";
+  if (celsius == null || Number.isNaN(celsius)) return "-";
   return `${celsius.toFixed(1)} °C`;
 }
 
 export function formatDistance(km: number | null | undefined): string {
-  if (km == null || Number.isNaN(km)) return "—";
+  if (km == null || Number.isNaN(km)) return "-";
   return `${nf({ maximumFractionDigits: 1 }).format(km)} km`;
 }
 
@@ -81,9 +81,9 @@ export function timeAgo(iso: string | null | undefined, now = Date.now()): strin
 }
 
 export function formatDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleString("en-GB", {
     day: "2-digit",
     month: "short",
@@ -94,16 +94,16 @@ export function formatDateTime(iso: string | null | undefined): string {
 }
 
 export function formatTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "-";
   const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
+  if (Number.isNaN(date.getTime())) return "-";
   return date.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
 
@@ -120,7 +120,7 @@ export function formatHourLabel(iso: string): string {
 }
 
 export function formatDuration(seconds: number | null | undefined): string {
-  if (seconds == null) return "—";
+  if (seconds == null) return "-";
   if (seconds < 60) return `${Math.round(seconds)}s`;
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ${Math.round(seconds % 60)}s`;
@@ -156,7 +156,7 @@ export function slugify(text: string): string {
     .replace(/^-|-$/g, "");
 }
 
-/** Deterministic pseudo-random in [0,1) from a string — used for stable visuals. */
+/** Deterministic pseudo-random in [0,1) from a string - used for stable visuals. */
 export function hashUnit(text: string): number {
   let h = 2166136261;
   for (let i = 0; i < text.length; i += 1) {

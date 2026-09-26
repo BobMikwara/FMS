@@ -70,6 +70,8 @@
   --ok-soft: rgb(22 163 74 / 0.12);
   --warn: #d97706;
   --warn-soft: rgb(217 119 6 / 0.14);
+  --tank-low: #a16207;
+  --tank-low-soft: rgb(161 98 7 / 0.14);
   --crit: #dc2626;
   --crit-soft: rgb(220 38 38 / 0.12);
   --info: #2563eb;
@@ -105,6 +107,8 @@
   --ok-soft: rgb(74 222 128 / 0.14);
   --warn: #fbbf24;
   --warn-soft: rgb(251 191 36 / 0.14);
+  --tank-low: #d6a756;
+  --tank-low-soft: rgb(214 167 86 / 0.16);
   --crit: #f87171;
   --crit-soft: rgb(248 113 113 / 0.14);
   --info: #60a5fa;
@@ -426,6 +430,11 @@
     color: var(--warn);
     border-color: color-mix(in srgb, var(--warn) 24%, transparent);
   }
+  .badge-brown {
+    background: var(--tank-low-soft);
+    color: var(--tank-low);
+    border-color: color-mix(in srgb, var(--tank-low) 28%, transparent);
+  }
   .badge-crit {
     background: var(--crit-soft);
     color: var(--crit);
@@ -473,6 +482,7 @@
   }
   table.data {
     width: 100%;
+    table-layout: fixed;
     border-collapse: separate;
     border-spacing: 0;
     font-size: 0.8125rem;
@@ -487,7 +497,8 @@
     padding: 0.625rem 0.875rem;
     border-bottom: 1px solid var(--line);
     background: var(--surface-2);
-    white-space: nowrap;
+    white-space: normal;
+    overflow-wrap: anywhere;
     position: sticky;
     top: 0;
     z-index: 1;
@@ -497,6 +508,7 @@
     border-bottom: 1px solid var(--line);
     vertical-align: middle;
     color: var(--ink);
+    overflow-wrap: anywhere;
   }
   table.data tbody tr:last-child td {
     border-bottom: none;
@@ -762,7 +774,7 @@
 }
 
 /* ==========================================================================
-   Print — used by the report PDF export path
+   Print - used by the report PDF export path
    ========================================================================== */
 
 @media print {

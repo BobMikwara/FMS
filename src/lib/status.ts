@@ -1,12 +1,12 @@
 /**
- * Status vocabulary — pure mapping helpers.
+ * Status vocabulary - pure mapping helpers.
  *
  * Deliberately free of React so both server components and client components can
  * import them. Every status in this product is rendered as colour **plus** text
  * (PRD §89), so the label helpers below are as important as the tones.
  */
 
-export type StatusTone = "ok" | "warn" | "crit" | "info" | "idle" | "neutral";
+export type StatusTone = "ok" | "warn" | "brown" | "crit" | "info" | "idle" | "neutral";
 
 export type TankStatus = "full" | "normal" | "low" | "critical" | "offline";
 export type StationStatus = "online" | "warning" | "critical" | "offline";
@@ -17,13 +17,15 @@ export type VehicleStatus = "active" | "maintenance" | "inactive";
 export type DataState = "live" | "delayed" | "stale" | "offline";
 
 export function tankStatusTone(status: TankStatus): StatusTone {
-  return status === "full" || status === "normal"
+  return status === "full"
     ? "ok"
-    : status === "low"
-      ? "warn"
-      : status === "critical"
-        ? "crit"
-        : "neutral";
+    : status === "normal"
+      ? "info"
+      : status === "low"
+        ? "brown"
+        : status === "critical"
+          ? "crit"
+          : "neutral";
 }
 
 export function tankStatusLabel(status: TankStatus): string {
@@ -137,8 +139,8 @@ export function confidenceTone(confidence: string): StatusTone {
 }
 
 /** Tank state thresholds from the PRD (§59), used for copy and validation. */
-export function tankStateForPercent(percent: number, criticalPct = 15, lowPct = 30): TankStatus {
-  if (percent >= 85) return "full";
+export function tankStateForPercent(percent: number, criticalPct = 15, lowPct = 30, fullPct = 85): TankStatus {
+  if (percent >= fullPct) return "full";
   if (percent >= lowPct) return "normal";
   if (percent >= criticalPct) return "low";
   return "critical";

@@ -76,7 +76,7 @@ export function ReportForm({
     }
     if (!form.title.trim()) {
       const categoryLabel = (REPORT_CATEGORIES.find((entry) => entry.value === form.category) ?? REPORT_CATEGORIES[0]).label;
-      next.title = `${categoryLabel} — ${period === "custom" ? "custom range" : period}`;
+      next.title = `${categoryLabel} - ${period === "custom" ? "custom range" : period}`;
     }
     setForm(next);
   };
@@ -158,7 +158,7 @@ export function ReportForm({
                 required
                 value={form.title}
                 onChange={(event) => setForm({ ...form, title: event.target.value })}
-                placeholder="Weekly consumption — all stations"
+                placeholder="Weekly consumption - all stations"
               />
             </Field>
           </div>
@@ -289,8 +289,8 @@ export function ReportForm({
         </div>
 
         <p className="text-[0.6875rem] leading-relaxed text-[var(--ink-3)]">
-          Reports are generated from the same data the dashboard uses. Where a value does not exist — no probe reading yet,
-          no tracker attached — the file says “Not available” instead of guessing.
+          Reports are generated from the same data the dashboard uses. Where a value does not exist - no probe reading yet,
+          no tracker attached - the file says “Not available” instead of guessing.
         </p>
       </aside>
     </form>

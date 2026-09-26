@@ -34,7 +34,7 @@ export default async function FuelTypesPage() {
       />
 
       <Notice tone="info" title="Deleting a fuel type">
-        A fuel type in use by a tank cannot be deleted — reassign or archive those tanks first. This protects the movement
+        A fuel type in use by a tank cannot be deleted - reassign or archive those tanks first. This protects the movement
         ledger from losing its meaning.
       </Notice>
 

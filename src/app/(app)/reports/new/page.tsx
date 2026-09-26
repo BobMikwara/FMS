@@ -33,7 +33,7 @@ export default async function NewReportPage() {
 
       <Notice tone="info" title="Consumption is measured, not sold">
         Outflow is labelled “Fuel Consumption / Tank Outflow” until dispenser integration exists. Numbers come from probe
-        readings, so they describe what left the tank — not what a pump rang up.
+        readings, so they describe what left the tank - not what a pump rang up.
       </Notice>
 
       <ReportForm

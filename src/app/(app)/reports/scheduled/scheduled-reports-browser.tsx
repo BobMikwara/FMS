@@ -263,7 +263,7 @@ export function ScheduledReportsBrowser({
                       {row.recipients.join(", ")}
                     </p>
                   ) : (
-                    <p className="mt-1.5 text-[0.75rem] text-[var(--warn)]">No recipients — nothing will be delivered.</p>
+                    <p className="mt-1.5 text-[0.75rem] text-[var(--warn)]">No recipients - nothing will be delivered.</p>
                   )}
                   <p className="mt-1.5 text-[0.6875rem] text-[var(--ink-3)]">
                     {row.lastRunAt ? `Last run ${timeAgo(row.lastRunAt)}` : "Never run"}
@@ -318,7 +318,7 @@ export function ScheduledReportsBrowser({
               required
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
-              placeholder="Weekly consumption — all stations"
+              placeholder="Weekly consumption - all stations"
             />
           </Field>
           <Field label="Category" htmlFor="schedule-category" required>

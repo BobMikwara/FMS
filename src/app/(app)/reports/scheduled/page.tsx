@@ -74,13 +74,13 @@ export default async function ScheduledReportsPage() {
         </h2>
         <ul className="mt-3 space-y-1.5 text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
           <li>
-            <strong className="font-medium text-[var(--ink)]">Daily</strong> — generated every day at the time you pick.
+            <strong className="font-medium text-[var(--ink)]">Daily</strong> - generated every day at the time you pick.
           </li>
           <li>
-            <strong className="font-medium text-[var(--ink)]">Weekly</strong> — generated on the day of the week you pick.
+            <strong className="font-medium text-[var(--ink)]">Weekly</strong> - generated on the day of the week you pick.
           </li>
           <li>
-            <strong className="font-medium text-[var(--ink)]">Monthly</strong> — generated on the day of the month you pick.
+            <strong className="font-medium text-[var(--ink)]">Monthly</strong> - generated on the day of the month you pick.
           </li>
         </ul>
         <p className="mt-3 flex items-center gap-2 text-[0.75rem] text-[var(--ink-3)]">

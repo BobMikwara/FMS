@@ -31,13 +31,18 @@ const modalSize = {
 export function Modal({ open, onClose, title, description, children, footer, size = "md", persistent }: ModalProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !persistent) {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
       }
       if (event.key === "Tab" && panelRef.current) {
         // Simple focus trap
@@ -60,14 +65,15 @@ export function Modal({ open, onClose, title, description, children, footer, siz
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     const timer = window.setTimeout(() => {
-      panelRef.current?.querySelector<HTMLElement>("[data-autofocus],input,textarea,select,button")?.focus();
+      const preferred = panelRef.current?.querySelector<HTMLElement>("[data-autofocus],input:not([type='hidden']),textarea,select");
+      (preferred ?? panelRef.current?.querySelector<HTMLElement>("button"))?.focus();
     }, 40);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
       window.clearTimeout(timer);
     };
-  }, [open, onClose, persistent]);
+  }, [open, persistent]);
 
   if (!open) return null;
 

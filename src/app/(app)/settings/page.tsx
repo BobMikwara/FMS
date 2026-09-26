@@ -20,7 +20,7 @@ const SECTIONS = [
     href: "/settings/fuel-types",
     icon: Fuel,
     title: "Fuel types",
-    description: "The products you store — display name, colour and density used for volume conversion.",
+    description: "The products you store - display name, colour and density used for volume conversion.",
   },
   {
     href: "/settings/notifications",

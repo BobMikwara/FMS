@@ -33,7 +33,7 @@ export default async function NotificationSettingsPage() {
 
       <Notice tone="info" title="Alerts always reach the interface first">
         Every alert appears in the notification centre and on the dashboard regardless of these settings. Email, SMS and
-        push are additional channels — turning them off never hides an alert from the people on shift.
+        push are additional channels - turning them off never hides an alert from the people on shift.
       </Notice>
 
       <NotificationSettingsForm

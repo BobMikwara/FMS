@@ -5,7 +5,7 @@ import { ToastProvider } from "@/components/ui/feedback";
 
 export const metadata: Metadata = {
   title: {
-    default: "SmartFuel — Fuel Monitoring & Station Management",
+    default: "SmartFuel - Fuel Monitoring & Station Management",
     template: "%s · SmartFuel",
   },
   description:

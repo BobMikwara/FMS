@@ -76,7 +76,7 @@ export default async function OrganizationsPage() {
                         <MapPin size={13} className="shrink-0 text-[var(--ink-3)]" />
                         <span className="truncate">{station.name}</span>
                         <span className="text-num ml-auto shrink-0 text-[0.75rem] text-[var(--ink-3)]">
-                          {station.city ?? "—"}
+                          {station.city ?? "-"}
                         </span>
                       </li>
                     ))}

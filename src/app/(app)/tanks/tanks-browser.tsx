@@ -148,14 +148,14 @@ export function TanksBrowser({
         header: "Temp",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.currentTempC == null ? "—" : `${row.currentTempC.toFixed(1)} °C`),
+        cell: (row) => (row.currentTempC == null ? "-" : `${row.currentTempC.toFixed(1)} °C`),
       },
       {
         key: "water",
         header: "Water",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.waterLevelMm == null ? "—" : `${row.waterLevelMm.toFixed(1)} mm`),
+        cell: (row) => (row.waterLevelMm == null ? "-" : `${row.waterLevelMm.toFixed(1)} mm`),
       },
       {
         key: "thresholds",

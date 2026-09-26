@@ -195,7 +195,7 @@ export function StationForm({ defaultCurrency, defaultCountry, station = null }:
               value={form.name}
               invalid={Boolean(fieldErrors.name)}
               onChange={(event) => set("name", event.target.value)}
-              placeholder="PUMA Arusha — Main Branch"
+              placeholder="PUMA Arusha - Main Branch"
               maxLength={120}
             />
           </Field>

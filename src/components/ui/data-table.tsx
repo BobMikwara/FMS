@@ -120,7 +120,7 @@ export function DataTable<T>({
   };
 
   return (
-    <div className={cn("card overflow-hidden", className)}>
+    <div className={cn("card relative", className)}>
       {toolbar ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-[var(--line)] px-3 py-2.5">
           {onSearch ? (
@@ -171,14 +171,14 @@ export function DataTable<T>({
               {columnMenuOpen ? (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setColumnMenuOpen(false)} />
-                  <div className="anim-scale-in absolute right-0 z-50 mt-1 w-52 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[var(--shadow-pop)]">
+                  <div className="anim-scale-in absolute right-0 z-50 mt-1 max-h-[min(22rem,calc(100vh-5rem))] w-56 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[var(--shadow-pop)]">
                     <p className="px-2 py-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--ink-3)]">
                       Visible columns
                     </p>
                     {columns.map((column) => (
                       <label
                         key={column.key}
-                        className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-[0.8125rem] hover:bg-[var(--surface-3)]"
+                        className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-[0.8125rem] leading-snug text-[var(--ink)] hover:bg-[var(--surface-3)]"
                       >
                         <input
                           type="checkbox"
