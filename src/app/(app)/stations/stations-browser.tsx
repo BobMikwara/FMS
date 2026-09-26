@@ -79,6 +79,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "name",
         header: "Station",
+        width: "23%",
         cell: (row) => (
           <div className="min-w-0">
             <Link href={`/stations/${row.id}`} className="block truncate text-[0.8125rem] font-medium text-[var(--ink)] hover:underline">
@@ -90,10 +91,11 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
           </div>
         ),
       },
-      { key: "status", header: "Status", cell: (row) => <StationStatusBadge status={row.status} /> },
+      { key: "status", header: "Status", width: "9%", cell: (row) => <StationStatusBadge status={row.status} /> },
       {
         key: "tanks",
         header: "Tanks",
+        width: "7%",
         numeric: true,
         hideOnMobile: true,
         cell: (row) => row.tankCount,
@@ -101,6 +103,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "fuel",
         header: "Fuel on hand",
+        width: "14%",
         numeric: true,
         cell: (row) => (
           <div>
@@ -114,6 +117,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "consumption",
         header: "Outflow today",
+        width: "11%",
         numeric: true,
         hideOnMobile: true,
         cell: (row) => <span className="text-num">{formatNumber(row.todayConsumption)} L</span>,
@@ -121,6 +125,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "refills",
         header: "Refills today",
+        width: "11%",
         numeric: true,
         hideOnMobile: true,
         cell: (row) => <span className="text-num">{formatNumber(row.todayRefills)} L</span>,
@@ -128,6 +133,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "alerts",
         header: "Alerts",
+        width: "8%",
         numeric: true,
         cell: (row) =>
           row.activeAlerts > 0 ? (
@@ -139,10 +145,11 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       {
         key: "devices",
         header: "Devices",
+        width: "7%",
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (
-          <span className="text-num text-[0.8125rem]">
+          <span className="whitespace-nowrap text-num text-[0.8125rem]">
             {row.totalDevices - row.offlineDevices}/{row.totalDevices}
           </span>
         ),
@@ -240,7 +247,7 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
             </Link>
           }
           rowActions={(row) => (
-            <div className="flex items-center justify-end gap-1">
+            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
               <Link href={`/stations/${row.id}`} className="btn btn-ghost btn-sm">
                 View
               </Link>

@@ -503,6 +503,11 @@
     top: 0;
     z-index: 1;
   }
+  table.data thead th.whitespace-nowrap,
+  table.data tbody td.whitespace-nowrap {
+    white-space: nowrap;
+    overflow-wrap: normal;
+  }
   table.data tbody td {
     padding: 0.75rem 0.875rem;
     border-bottom: 1px solid var(--line);

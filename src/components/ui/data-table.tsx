@@ -251,7 +251,7 @@ export function DataTable<T>({
                       </span>
                     </th>
                   ))}
-                  {rowActions ? <th className="w-10 text-right">Actions</th> : null}
+                  {rowActions ? <th className="w-[9rem] whitespace-nowrap text-right">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -276,7 +276,7 @@ export function DataTable<T>({
                         </td>
                       ))}
                       {rowActions ? (
-                        <td className="text-right" onClick={(event) => event.stopPropagation()}>
+                        <td className="whitespace-nowrap text-right" onClick={(event) => event.stopPropagation()}>
                           {rowActions(row)}
                         </td>
                       ) : null}
