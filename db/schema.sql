@@ -1,15 +1,13 @@
 -- ============================================================================
 -- SmartFuel — Fuel Monitoring & Management Platform
--- Executable schema for the local/development engine (SQLite via node:sqlite).
+-- PostgreSQL-compatible schema for the SmartFuel application.
 --
--- This file is a 1:1 mirror of `docs/ERD.md` (the canonical entity model, which
--- also targets PostgreSQL in production). Every business table is scoped to an
+-- This file preserves the canonical SmartFuel entity model while using PostgreSQL-compatible syntax.
+-- Every business table is scoped to an
 -- organization (multi-tenant). `readings` is an append-only time-series table.
 -- ============================================================================
 
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
+
 
 -- --------------------------------------------------------------------------
 -- Multi-tenancy
@@ -26,8 +24,8 @@ CREATE TABLE IF NOT EXISTS organizations (
   locale      TEXT NOT NULL DEFAULT 'en',
   plan        TEXT NOT NULL DEFAULT 'growth',
   is_active   INTEGER NOT NULL DEFAULT 1,
-  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at  TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at  TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug);
 
@@ -41,8 +39,8 @@ CREATE TABLE IF NOT EXISTS roles (
   description TEXT NOT NULL DEFAULT '',
   is_system   INTEGER NOT NULL DEFAULT 0,
   permissions TEXT NOT NULL DEFAULT '[]',
-  created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at  TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at  TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -62,8 +60,8 @@ CREATE TABLE IF NOT EXISTS users (
   locked_until    TEXT,
   mfa_enabled     INTEGER NOT NULL DEFAULT 0,
   mfa_secret      TEXT,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_users_org ON users(organization_id);
 CREATE INDEX IF NOT EXISTS idx_users_role ON users(role_id);
@@ -74,7 +72,7 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
   token_hash TEXT NOT NULL UNIQUE,
   expires_at TEXT NOT NULL,
   used_at    TEXT,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_reset_tokens_user ON password_reset_tokens(user_id);
 
@@ -102,8 +100,8 @@ CREATE TABLE IF NOT EXISTS stations (
   volume_unit     TEXT NOT NULL DEFAULT 'liters',
   notes           TEXT,
   is_archived     INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_stations_org ON stations(organization_id);
 CREATE INDEX IF NOT EXISTS idx_stations_status ON stations(status);
@@ -123,8 +121,8 @@ CREATE TABLE IF NOT EXISTS fuel_types (
   color           TEXT NOT NULL DEFAULT '#3b82f6',
   density         REAL,
   is_active       INTEGER NOT NULL DEFAULT 1,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   UNIQUE (organization_id, system_name)
 );
 CREATE INDEX IF NOT EXISTS idx_fuel_types_org ON fuel_types(organization_id);
@@ -153,8 +151,8 @@ CREATE TABLE IF NOT EXISTS tanks (
   status                TEXT NOT NULL DEFAULT 'normal',
   notes                 TEXT,
   is_archived           INTEGER NOT NULL DEFAULT 0,
-  created_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at            TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at            TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at            TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   UNIQUE (station_id, code)
 );
 CREATE INDEX IF NOT EXISTS idx_tanks_org ON tanks(organization_id);
@@ -162,9 +160,33 @@ CREATE INDEX IF NOT EXISTS idx_tanks_station ON tanks(station_id);
 CREATE INDEX IF NOT EXISTS idx_tanks_fuel_type ON tanks(fuel_type_id);
 CREATE INDEX IF NOT EXISTS idx_tanks_status ON tanks(status);
 
+CREATE TABLE IF NOT EXISTS vehicles (
+  id              TEXT PRIMARY KEY,
+  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+  name            TEXT NOT NULL,
+  plate_number    TEXT NOT NULL UNIQUE,
+  type            TEXT NOT NULL DEFAULT 'tanker',
+  make            TEXT,
+  model           TEXT,
+  year            INTEGER,
+  fuel_type_id    TEXT REFERENCES fuel_types(id) ON DELETE SET NULL,
+  tank_capacity   REAL,
+  station_id      TEXT REFERENCES stations(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'active',
+  odometer_km     REAL,
+  driver_name     TEXT,
+  driver_phone    TEXT,
+  notes           TEXT,
+  is_archived     INTEGER NOT NULL DEFAULT 0,
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
+);
+
 -- --------------------------------------------------------------------------
 -- Devices
 -- --------------------------------------------------------------------------
+
+
 CREATE TABLE IF NOT EXISTS devices (
   id              TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
@@ -186,38 +208,9 @@ CREATE TABLE IF NOT EXISTS devices (
   api_key_hash    TEXT,
   is_active       INTEGER NOT NULL DEFAULT 1,
   metadata        TEXT,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
-CREATE INDEX IF NOT EXISTS idx_devices_org ON devices(organization_id);
-CREATE INDEX IF NOT EXISTS idx_devices_type ON devices(type);
-CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status);
-CREATE INDEX IF NOT EXISTS idx_devices_tank ON devices(tank_id);
-CREATE INDEX IF NOT EXISTS idx_devices_vehicle ON devices(vehicle_id);
-
-CREATE TABLE IF NOT EXISTS vehicles (
-  id              TEXT PRIMARY KEY,
-  organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
-  name            TEXT NOT NULL,
-  plate_number    TEXT NOT NULL UNIQUE,
-  type            TEXT NOT NULL DEFAULT 'tanker',
-  make            TEXT,
-  model           TEXT,
-  year            INTEGER,
-  fuel_type_id    TEXT REFERENCES fuel_types(id) ON DELETE SET NULL,
-  tank_capacity   REAL,
-  station_id      TEXT REFERENCES stations(id) ON DELETE SET NULL,
-  status          TEXT NOT NULL DEFAULT 'active',
-  odometer_km     REAL,
-  driver_name     TEXT,
-  driver_phone    TEXT,
-  notes           TEXT,
-  is_archived     INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
-);
-CREATE INDEX IF NOT EXISTS idx_vehicles_org ON vehicles(organization_id);
-CREATE INDEX IF NOT EXISTS idx_vehicles_status ON vehicles(status);
 
 -- --------------------------------------------------------------------------
 -- Time-series readings (append-only)
@@ -225,7 +218,7 @@ CREATE INDEX IF NOT EXISTS idx_vehicles_status ON vehicles(status);
 CREATE TABLE IF NOT EXISTS readings (
   id              TEXT PRIMARY KEY,
   ts              TEXT NOT NULL,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   tank_id         TEXT NOT NULL REFERENCES tanks(id) ON DELETE CASCADE,
   device_id       TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
@@ -248,7 +241,7 @@ CREATE INDEX IF NOT EXISTS idx_readings_org_ts ON readings(organization_id, ts);
 CREATE TABLE IF NOT EXISTS fuel_events (
   id              TEXT PRIMARY KEY,
   ts              TEXT NOT NULL,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   station_id      TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
   tank_id         TEXT NOT NULL REFERENCES tanks(id) ON DELETE CASCADE,
@@ -288,15 +281,15 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   channels        TEXT NOT NULL DEFAULT '["in_app","email"]',
   is_enabled      INTEGER NOT NULL DEFAULT 1,
   cooldown_min    INTEGER NOT NULL DEFAULT 30,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_alert_rules_org ON alert_rules(organization_id);
 CREATE INDEX IF NOT EXISTS idx_alert_rules_enabled ON alert_rules(is_enabled);
 CREATE TABLE IF NOT EXISTS alerts (
   id                 TEXT PRIMARY KEY,
-  created_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at         TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at         TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at         TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   organization_id    TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   station_id         TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
   tank_id            TEXT REFERENCES tanks(id) ON DELETE CASCADE,
@@ -329,7 +322,7 @@ CREATE TABLE IF NOT EXISTS alert_notes (
   alert_id   TEXT NOT NULL REFERENCES alerts(id) ON DELETE CASCADE,
   user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   body       TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_alert_notes_alert ON alert_notes(alert_id);
 
@@ -353,8 +346,8 @@ CREATE TABLE IF NOT EXISTS reports (
   file_url        TEXT,
   summary         TEXT,
   error           TEXT,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_reports_org_created ON reports(organization_id, created_at);
 
@@ -375,8 +368,8 @@ CREATE TABLE IF NOT EXISTS scheduled_reports (
   is_enabled      INTEGER NOT NULL DEFAULT 1,
   last_run_at     TEXT,
   next_run_at     TEXT,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_scheduled_reports_org ON scheduled_reports(organization_id);
 
@@ -395,8 +388,8 @@ CREATE TABLE IF NOT EXISTS integrations (
   last_sync_at    TEXT,
   last_error      TEXT,
   is_enabled      INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   UNIQUE (organization_id, kind, provider)
 );
 CREATE INDEX IF NOT EXISTS idx_integrations_org ON integrations(organization_id);
@@ -406,7 +399,7 @@ CREATE TABLE IF NOT EXISTS system_settings (
   organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
   key             TEXT NOT NULL,
   value           TEXT NOT NULL DEFAULT 'null',
-  updated_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  updated_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   UNIQUE (organization_id, key)
 );
 CREATE INDEX IF NOT EXISTS idx_system_settings_org ON system_settings(organization_id);
@@ -424,13 +417,13 @@ CREATE TABLE IF NOT EXISTS notifications (
   severity        TEXT NOT NULL DEFAULT 'info',
   channel         TEXT NOT NULL DEFAULT 'in_app',
   is_read         INTEGER NOT NULL DEFAULT 0,
-  created_at      TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+  created_at      TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_org ON notifications(organization_id, is_read, created_at);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id          TEXT PRIMARY KEY,
-  ts          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+  ts          TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
   user_id     TEXT REFERENCES users(id) ON DELETE SET NULL,
   user_label  TEXT NOT NULL DEFAULT 'System',
   action      TEXT NOT NULL,
