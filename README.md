@@ -193,7 +193,7 @@ Register the device (`/devices/new`), then point your gateway at:
 
 ```
 POST https://<your-host>/api/webhooks/device/tectonic
-X-Device-Key: <DEVICE_INGEST_KEY>
+X-API-Key: <device-key>
 ```
 
 Adapters exist for **Tectonic**, **Veeder-Root**, a **generic MQTT bridge**, **Queclink** and
@@ -238,6 +238,28 @@ database every device's key is `demo-<serial-number-in-lowercase>` (for example
 `demo-probe-100407`), so the whole ingest path can be exercised end to end without hardware.
 Real deployments generate a random key per device and never store the plaintext.
 
+A lost key is not recoverable by design. Use **Rotate key** on the device list
+(`PATCH /api/devices/{id}` with `{"rotateApiKey": true}`) — the old key stops working
+immediately and the replacement is shown once. Rotating keeps the device's reading
+history intact.
+
+#### Rejected readings
+
+A payload the engine cannot trust never reaches reporting. It is answered with `422`
+(impossible value) or `409` (device misconfigured) and the reason is written back to the
+caller, for example:
+
+| Payload problem | Response |
+| --- | --- |
+| Negative volume | `422 Negative volume reported (-500 L)` |
+| Volume above tank capacity | `422 Reported volume 999999 L exceeds tank capacity 34125 L` |
+| Implausible temperature | `422 Implausible temperature (999 °C)` |
+| No volume field at all | `422 The Tectonic Probe Gateway payload could not be normalised into a reading` |
+| Malformed JSON | `422 Request body must be valid JSON.` |
+| Missing or wrong device key | `401 Device credentials were rejected.` |
+| Unknown provider | `404` |
+| Tracker sent to the probe endpoint | `409 This device is a GPS tracker, not a fuel probe…` |
+
 ### 2. GPS / telematics
 
 Same endpoint, different provider key. Positions land on the network map and on the vehicle
@@ -265,7 +287,7 @@ values.
 | `AUTH_SECRET` | signs session JWTs — must be long and random |
 | `AUTH_URL` | public origin, used in password-reset links |
 | `SESSION_MAX_AGE_SECONDS` | session lifetime |
-| `DEVICE_INGEST_KEY` | shared secret devices must present |
+| `DEVICE_INGEST_KEY` | legacy shared secret; per-device `x-api-key` is the primary mechanism |
 | `REALTIME_TRANSPORT` | `sse` (default) or `polling` |
 | `DEMO_SIMULATOR` | `on` generates synthetic traffic, `off` is live-only |
 | `RATE_LIMIT_MAX` · `RATE_LIMIT_WINDOW_SECONDS` | per-client rate limiting |
@@ -288,6 +310,15 @@ history.
 - **Keyboard operable** throughout, including the map markers and the ⌘K command palette.
 - **PWA-ready** — web manifest and maskable icons ship in `public/`.
 - **Light / dark / system** theming with no flash of wrong theme on load.
+- **Deep links are honoured.** A KPI card that promises a filtered view actually applies the
+  filter — `/tanks?low=true`, `/devices?status=offline` and
+  `/devices?type=fuel_probe&reporting=problem` all land on the filtered table.
+- **Honest status codes.** Uniqueness violations become `409` naming the conflicting field;
+  authorisation failures are `403`; missing records are `404`. A 500 is always a genuine
+  server fault and is logged, never shown to the user.
+- **KPIs reconcile with the database.** Station, tank, capacity, alert and movement totals on
+  the dashboard are computed from the same rows the tables show, and the “not reporting”
+  device count uses exactly the predicate behind `GET /api/devices?reporting=problem`.
 
 ---
 
