@@ -25,9 +25,9 @@ export default async function ReportsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const reports = listReports({ orgId: user.organizationId, pageSize: 50 }).rows;
-  const scheduled = listScheduledReports(user.organizationId);
-  const users = listUsers(user.organizationId);
+  const reports = (await listReports({ orgId: user.organizationId, pageSize: 50, stationIds: user.stationIds })).rows;
+  const scheduled = (await listScheduledReports(user.organizationId, user.stationIds));
+  const users = (await listUsers(user.organizationId));
   const authorName = new Map(users.map((entry) => [entry.id, entry.name]));
 
   const rows = reports.map((report) => ({

@@ -17,10 +17,14 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
   const { stationId } = await params;
   const user = await getCurrentUser();
   if (!user) return null;
-  const station = getStation(stationId);
-  if (!station || station.organizationId !== user.organizationId) notFound();
+  const station = (await getStation(stationId));
+  if (
+    !station ||
+    station.organizationId !== user.organizationId ||
+    (user.stationIds.length > 0 && !user.stationIds.includes(stationId))
+  ) notFound();
 
-  const detail = buildStationDetail(stationId, "7d");
+  const detail = (await buildStationDetail(stationId, "7d"));
 
   return (
     <div className="space-y-5">

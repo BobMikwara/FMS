@@ -13,8 +13,8 @@ export default async function MovementsPage() {
 
   const from = isoDaysAgo(14);
   const to = new Date().toISOString();
-  const { rows } = listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50 });
-  const totals = movementTotals(user.organizationId, from, to);
+  const { rows } = (await listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50 }));
+  const totals = (await movementTotals(user.organizationId, from, to));
 
   return (
     <div className="space-y-5">
@@ -29,7 +29,7 @@ export default async function MovementsPage() {
           value={Math.round(totals.consumption).toLocaleString()}
           unit="L"
           tone="info"
-          hint="Fuel consumption / tank outflow — not the same as fuel sold until dispenser integration exists."
+          hint="Fuel consumption / tank outflow - not the same as fuel sold until dispenser integration exists."
         />
         <StatCard
           label="Refills (14 days)"
@@ -43,7 +43,7 @@ export default async function MovementsPage() {
           value={Math.round(totals.suspectedLoss).toLocaleString()}
           unit="L"
           tone={totals.suspectedLoss > 0 ? "warn" : "neutral"}
-          hint="Possible anomaly flagged for investigation — never auto-classified as theft."
+          hint="Possible anomaly flagged for investigation - never auto-classified as theft."
         />
         <StatCard
           label="Events recorded"

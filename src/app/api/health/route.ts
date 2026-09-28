@@ -5,9 +5,9 @@ export const dynamic = "force-dynamic";
 /** Liveness + readiness probe. Used by the live preview and load balancers. */
 export async function GET() {
   try {
-    ensureSchema();
-    const stations = Number(queryOne<{ n: number }>("SELECT count(*) AS n FROM stations")?.n ?? 0);
-    const tanks = Number(queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks")?.n ?? 0);
+    (await ensureSchema());
+    const stations = Number((await queryOne<{ n: number }>("SELECT count(*) AS n FROM stations"))?.n ?? 0);
+    const tanks = Number((await queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks"))?.n ?? 0);
     return Response.json({
       ok: true,
       status: "healthy",
@@ -17,6 +17,7 @@ export async function GET() {
       database: { connected: true, stations, tanks },
     });
   } catch (error) {
+    console.error("[health] database readiness check failed", error);
     return Response.json(
       {
         ok: false,
@@ -24,7 +25,6 @@ export async function GET() {
         service: "smartfuel-api",
         timestamp: new Date().toISOString(),
         database: { connected: false },
-        error: error instanceof Error ? error.message : "unknown",
       },
       { status: 503 },
     );

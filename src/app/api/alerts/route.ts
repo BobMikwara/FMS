@@ -1,4 +1,4 @@
-import { acknowledgeAlert, listAlerts, resolveAlert } from "@/server/db/repo/alerts";
+import { acknowledgeAlert, getAlert, listAlerts, resolveAlert } from "@/server/db/repo/alerts";
 import { jsonError, jsonOk, notFound, parseJsonBody, parsePagination, unprocessable, withPermission } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
@@ -7,7 +7,7 @@ export const GET = withPermission("alerts.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 20);
-    const result = listAlerts({
+    const result = (await listAlerts({
       orgId: ctx.user.organizationId,
       status: params.get("status") ?? undefined,
       severity: params.get("severity") ?? undefined,
@@ -18,13 +18,9 @@ export const GET = withPermission("alerts.view", async (request, ctx) => {
       order: (params.get("order") as "asc" | "desc") ?? "desc",
       page,
       pageSize,
-    });
-    // A supervisor scoped to specific stations only sees those stations' alerts.
-    const rows =
-      ctx.user.stationIds.length > 0
-        ? result.rows.filter((alert) => ctx.user.stationIds.includes(alert.stationId))
-        : result.rows;
-    return jsonOk({ rows, total: rows.length, page, pageSize });
+      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+    }));
+    return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
   }
@@ -36,9 +32,17 @@ export const POST = withPermission("alerts.acknowledge", async (request, ctx) =>
     if (!body.id) {
       return jsonError(unprocessable("Alert id is required."));
     }
-    const action = body.action ?? "acknowledge";
+    const existing = await getAlert(body.id);
+    if (
+      !existing ||
+      existing.organizationId !== ctx.user.organizationId ||
+      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(existing.stationId))
+    ) {
+      return jsonError(notFound("Alert not found."), request);
+    }
+    const action = body.action === "resolve" ? "resolve" : "acknowledge";
     const alert =
-      action === "resolve" ? resolveAlert(body.id, ctx.user.id, body.note) : acknowledgeAlert(body.id, ctx.user.id);
+      action === "resolve" ? await resolveAlert(body.id, ctx.user.id, body.note) : await acknowledgeAlert(body.id, ctx.user.id);
     if (!alert) {
       return jsonError(notFound("Alert not found."));
     }

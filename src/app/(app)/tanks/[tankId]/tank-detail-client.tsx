@@ -22,6 +22,7 @@ import { TankBar, TankVisual } from "@/components/charts/tank-visual";
 import { FuelReplay } from "@/components/charts/fuel-replay";
 import { EventTypeBadge, ConfidenceBadge } from "@/components/domain/badges";
 import type { Tank, Station, FuelType, Device, Alert } from "@/server/domain/types";
+import { tankStateForPercent } from "@/lib/status";
 
 export interface TankDetailProps {
   tank: Tank;
@@ -105,6 +106,10 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
 
   const state = DATA_STATE_COPY[detail.dataState] ?? DATA_STATE_COPY.offline;
   const latest = detail.latestReading;
+  const visualStatus: Tank["status"] =
+    !latest && detail.dataState === "offline"
+      ? "offline"
+      : tankStateForPercent(detail.fillPercent, tank.criticalThresholdPct, tank.lowThresholdPct);
 
   const chartSeries = useMemo<Series[]>(() => {
     if (detail.history.length < 2) return [];
@@ -205,7 +210,7 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-[1.0625rem] font-semibold tracking-[-0.02em] text-[var(--ink)]">Current status</h2>
-              <StatusBadge tone={tankStatusTone(detail.status)}>{statusLabel(detail.status)}</StatusBadge>
+              <StatusBadge tone={tankStatusTone(visualStatus)}>{statusLabel(visualStatus)}</StatusBadge>
               <Badge tone={state.tone}>
                 <span className="flex items-center gap-1.5">
                   <StatusDot
@@ -232,8 +237,8 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
           </div>
         </div>
 
-        <div className="mt-5 grid gap-6 lg:grid-cols-[minmax(0,20rem)_1fr]">
-          <div className="flex items-center gap-5">
+        <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(19rem,22rem)_minmax(0,1fr)]">
+          <div className="grid min-w-0 items-center gap-5 sm:grid-cols-[auto_minmax(0,1fr)]">
             <TankVisual
               name={tank.name}
               fuelType={fuelType?.systemName ?? "fuel"}
@@ -241,7 +246,9 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
               color={fuelType?.color ?? "#0f766e"}
               volume={latest?.volumeLiters ?? 0}
               capacity={tank.capacity}
-              status={detail.status}
+              status={visualStatus}
+              lowThresholdPct={tank.lowThresholdPct}
+              criticalThresholdPct={tank.criticalThresholdPct}
               dataState={detail.dataState}
               size="md"
               showMarkings
@@ -288,7 +295,7 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
             className={cn(
               "-mb-px border-b-2 px-3.5 py-2.5 text-[0.8125rem] font-medium transition-colors",
               tab === item.id
-                ? "border-[var(--brand)] text-[var(--brand-ink)]"
+                ? "border-[var(--ink)] text-[var(--ink)]"
                 : "border-transparent text-[var(--ink-2)] hover:border-[var(--line-strong)] hover:text-[var(--ink)]",
             )}
           >
@@ -391,7 +398,7 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
           <p className="mt-1 max-w-2xl text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
             Opening stock + refills − consumption = expected closing stock. The variance compares the probe's measured
             volume against that expectation. A large variance may indicate an unrecorded delivery, a metering issue or a
-            possible leak — investigate before drawing conclusions.
+            possible leak - investigate before drawing conclusions.
           </p>
           <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Metric label="Opening stock" value={`${formatNumber(Math.round(detail.reconciliation.openingStock))} L`} />
@@ -506,12 +513,12 @@ function ReadingsTable({ readings }: { readings: ReadingRow[] }) {
       numeric: true,
       cell: (row) => <span className="text-num font-semibold">{formatNumber(Math.round(row.volumeLiters))}</span>,
     },
-    { key: "levelPercent", header: "Level", numeric: true, cell: (row) => (row.levelPercent == null ? "—" : formatPercent(row.levelPercent, 1)) },
-    { key: "temperatureC", header: "Temp", numeric: true, hideOnMobile: true, cell: (row) => (row.temperatureC == null ? "—" : `${row.temperatureC.toFixed(1)} °C`) },
-    { key: "waterLevelMm", header: "Water", numeric: true, hideOnMobile: true, cell: (row) => (row.waterLevelMm == null ? "—" : `${row.waterLevelMm.toFixed(1)} mm`) },
-    { key: "signal", header: "Signal", numeric: true, hideOnMobile: true, cell: (row) => (row.signal == null ? "—" : `${row.signal}`) },
-    { key: "batteryPct", header: "Battery", numeric: true, hideOnMobile: true, cell: (row) => (row.batteryPct == null ? "—" : `${row.batteryPct}%`) },
-    { key: "deviceSerial", header: "Device", hideOnMobile: true, cell: (row) => row.deviceSerial ?? "—" },
+    { key: "levelPercent", header: "Level", numeric: true, cell: (row) => (row.levelPercent == null ? "-" : formatPercent(row.levelPercent, 1)) },
+    { key: "temperatureC", header: "Temp", numeric: true, hideOnMobile: true, cell: (row) => (row.temperatureC == null ? "-" : `${row.temperatureC.toFixed(1)} °C`) },
+    { key: "waterLevelMm", header: "Water", numeric: true, hideOnMobile: true, cell: (row) => (row.waterLevelMm == null ? "-" : `${row.waterLevelMm.toFixed(1)} mm`) },
+    { key: "signal", header: "Signal", numeric: true, hideOnMobile: true, cell: (row) => (row.signal == null ? "-" : `${row.signal}`) },
+    { key: "batteryPct", header: "Battery", numeric: true, hideOnMobile: true, cell: (row) => (row.batteryPct == null ? "-" : `${row.batteryPct}%`) },
+    { key: "deviceSerial", header: "Device", hideOnMobile: true, cell: (row) => row.deviceSerial ?? "-" },
   ];
 
   if (readings.length === 0) {

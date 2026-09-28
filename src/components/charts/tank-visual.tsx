@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn, formatNumber, formatPercent } from "@/lib/utils";
+import { tankStateForPercent } from "@/lib/status";
 import { LiveIndicator, StatusBadge } from "@/components/ui/feedback";
 
 /**
@@ -9,7 +10,7 @@ import { LiveIndicator, StatusBadge } from "@/components/ui/feedback";
  *
  * Shows the tank as a physical vessel with a smoothly animating liquid level,
  * capacity markings, fuel-type colour and the current volume. Never relies on
- * colour alone — the status is always written out.
+ * colour alone - the status is always written out.
  */
 
 export interface TankVisualProps {
@@ -24,6 +25,8 @@ export interface TankVisualProps {
   showMarkings?: boolean;
   showHeader?: boolean;
   status?: "full" | "normal" | "low" | "critical" | "offline";
+  lowThresholdPct?: number;
+  criticalThresholdPct?: number;
   temperatureC?: number | null;
   waterLevelMm?: number | null;
   lastUpdated?: string | null;
@@ -51,6 +54,8 @@ export function TankVisual({
   showMarkings = true,
   showHeader = true,
   status,
+  lowThresholdPct = 30,
+  criticalThresholdPct = 15,
   temperatureC,
   waterLevelMm,
   lastUpdated,
@@ -72,9 +77,19 @@ export function TankVisual({
   }, [percent, animate]);
 
   const derivedStatus: NonNullable<TankVisualProps["status"]> =
-    status ?? (percent >= 95 ? "full" : percent < 10 ? "critical" : percent < 20 ? "low" : "normal");
+    status === "offline" && percent === 0
+      ? "offline"
+      : tankStateForPercent(percent, criticalThresholdPct, lowThresholdPct);
 
-  const statusTone = { full: "ok", normal: "ok", low: "warn", critical: "crit", offline: "idle" } as const;
+  const stateColors = {
+    full: "#16a34a",
+    normal: "#2563eb",
+    low: "#a16207",
+    critical: "#dc2626",
+    offline: "#64748b",
+  } as const;
+  const fillColor = stateColors[derivedStatus] ?? color;
+  const statusTone = { full: "ok", normal: "info", low: "brown", critical: "crit", offline: "idle" } as const;
   const statusLabel = {
     full: "Full",
     normal: "Normal",
@@ -115,7 +130,7 @@ export function TankVisual({
             className="tank-liquid"
             style={{
               height: `${displayPercent}%`,
-              background: `linear-gradient(180deg, ${color}, color-mix(in srgb, ${color} 70%, #000))`,
+              background: `linear-gradient(180deg, ${fillColor}, color-mix(in srgb, ${fillColor} 70%, #000))`,
               boxShadow: "inset 0 6px 12px -6px rgb(255 255 255 / 0.45)",
             }}
           />

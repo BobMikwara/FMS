@@ -10,7 +10,7 @@ export default async function AuditLogsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const logs = listAuditLogs({ orgId: user.organizationId, pageSize: 500 }).rows;
+  const logs = (await listAuditLogs({ orgId: user.organizationId, pageSize: 500 })).rows;
 
   const rows = logs.map((log) => ({
     id: log.id,

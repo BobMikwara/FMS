@@ -13,12 +13,12 @@ export default async function EditVehiclePage({ params }: { params: Promise<{ ve
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const vehicle = getVehicle(vehicleId);
+  const vehicle = (await getVehicle(vehicleId));
   if (!vehicle || vehicle.organizationId !== user.organizationId) notFound();
 
-  const stations = listAllStations(user.organizationId).filter((station) => !station.isArchived);
-  const fuelTypes = listFuelTypes(user.organizationId);
-  const vehicleCount = listAllVehicles(user.organizationId).length;
+  const stations = (await listAllStations(user.organizationId)).filter((station) => !station.isArchived);
+  const fuelTypes = (await listFuelTypes(user.organizationId));
+  const vehicleCount = (await listAllVehicles(user.organizationId)).length;
 
   return (
     <div className="space-y-5">

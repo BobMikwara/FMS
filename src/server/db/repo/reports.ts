@@ -13,9 +13,10 @@ export interface ReportFilter {
   search?: string;
   page?: number;
   pageSize?: number;
+  stationIds?: string[];
 }
 
-export function listReports(filter: ReportFilter): { rows: Report[]; total: number } {
+export async function listReports(filter: ReportFilter): Promise<{ rows: Report[]; total: number }> {
   const where: string[] = ["r.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
   if (filter.category) {
@@ -31,31 +32,39 @@ export function listReports(filter: ReportFilter): { rows: Report[]; total: numb
     params.push(`%${filter.search}%`);
   }
   const clause = `WHERE ${where.join(" AND ")}`;
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM reports r ${clause}`, params)?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(100, Math.max(5, filter.pageSize ?? 20));
-  const rows = query<Record<string, unknown>>(
+  const needsStationPostFilter = Boolean(filter.stationIds && filter.stationIds.length > 0);
+  const rows = (await query<Record<string, unknown>>(
     `SELECT r.*, u.name AS created_by_name FROM reports r JOIN users u ON u.id = r.created_by_id
-     ${clause} ORDER BY r.created_at DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, (page - 1) * pageSize],
-  );
-  return { rows: rows.map(mapReport), total };
+     ${clause} ORDER BY r.created_at DESC ${needsStationPostFilter ? "" : "LIMIT ? OFFSET ?"}`,
+    needsStationPostFilter ? params : [...params, pageSize, (page - 1) * pageSize],
+  )).map(mapReport).filter((report) => {
+    if (!needsStationPostFilter) return true;
+    const selectedStationId = typeof report.filters.stationId === "string" ? report.filters.stationId : null;
+    return !selectedStationId || filter.stationIds!.includes(selectedStationId);
+  });
+  const total = rows.length;
+  return {
+    rows: needsStationPostFilter ? rows.slice((page - 1) * pageSize, page * pageSize) : rows,
+    total,
+  };
 }
 
-export function getReport(reportId: string): Report | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM reports WHERE id = ?", [reportId]);
+export async function getReport(reportId: string): Promise<Report | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM reports WHERE id = ?", [reportId]));
   return row ? mapReport(row) : null;
 }
 
-export function getReportWithAuthor(reportId: string): (Report & { createdByName: string }) | null {
-  const row = queryOne<Record<string, unknown>>(
+export async function getReportWithAuthor(reportId: string): Promise<(Report & { createdByName: string }) | null> {
+  const row = (await queryOne<Record<string, unknown>>(
     `SELECT r.*, u.name AS created_by_name FROM reports r JOIN users u ON u.id = r.created_by_id WHERE r.id = ?`,
     [reportId],
-  );
+  ));
   return row ? { ...mapReport(row), createdByName: String(row.created_by_name) } : null;
 }
 
-export function createReport(input: {
+export async function createReport(input: {
   organizationId: string;
   createdById: string;
   title: string;
@@ -69,9 +78,9 @@ export function createReport(input: {
   format?: Report["format"];
   summary?: Record<string, unknown> | null;
   error?: string | null;
-}): Report {
+}): Promise<Report> {
   const reportId = id("rpt");
-  execute(
+  (await execute(
     `INSERT INTO reports (id, organization_id, created_by_id, title, category, period, date_from, date_to,
        filters, status, progress, format, summary, error, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -91,11 +100,11 @@ export function createReport(input: {
       input.summary ? JSON.stringify(input.summary) : null,
       input.error ?? null,
     ],
-  );
-  return getReport(reportId)!;
+  ));
+  return (await getReport(reportId))!;
 }
 
-export function updateReport(reportId: string, patch: Record<string, unknown>): Report | null {
+export async function updateReport(reportId: string, patch: Record<string, unknown>): Promise<Report | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -103,18 +112,18 @@ export function updateReport(reportId: string, patch: Record<string, unknown>): 
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getReport(reportId);
+  if (fields.length === 0) return (await getReport(reportId));
   values.push(reportId);
-  execute(`UPDATE reports SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getReport(reportId);
+  (await execute(`UPDATE reports SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getReport(reportId));
 }
 
-export function deleteReport(reportId: string): void {
-  execute("DELETE FROM reports WHERE id = ?", [reportId]);
+export async function deleteReport(reportId: string): Promise<void> {
+  (await execute("DELETE FROM reports WHERE id = ?", [reportId]));
 }
 
-export function countReports(orgId: string): number {
-  return Number(queryOne<{ n: number }>("SELECT count(*) AS n FROM reports WHERE organization_id = ?", [orgId])?.n ?? 0);
+export async function countReports(orgId: string): Promise<number> {
+  return Number((await queryOne<{ n: number }>("SELECT count(*) AS n FROM reports WHERE organization_id = ?", [orgId]))?.n ?? 0);
 }
 
 function mapReport(row: Record<string, unknown>): Report {
@@ -143,19 +152,21 @@ function mapReport(row: Record<string, unknown>): Report {
 /* Scheduled reports                                                          */
 /* -------------------------------------------------------------------------- */
 
-export function listScheduledReports(orgId: string): ScheduledReport[] {
-  return query<Record<string, unknown>>(
+export async function listScheduledReports(orgId: string, stationIds?: string[]): Promise<ScheduledReport[]> {
+  const rows = (await query<Record<string, unknown>>(
     "SELECT * FROM scheduled_reports WHERE organization_id = ? ORDER BY is_enabled DESC, name",
     [orgId],
-  ).map(mapScheduled);
+  )).map(mapScheduled);
+  if (!stationIds || stationIds.length === 0) return rows;
+  return rows.filter((row) => row.stationId != null && stationIds.includes(row.stationId));
 }
 
-export function getScheduledReport(scheduledId: string): ScheduledReport | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM scheduled_reports WHERE id = ?", [scheduledId]);
+export async function getScheduledReport(scheduledId: string): Promise<ScheduledReport | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM scheduled_reports WHERE id = ?", [scheduledId]));
   return row ? mapScheduled(row) : null;
 }
 
-export function createScheduledReport(input: {
+export async function createScheduledReport(input: {
   organizationId: string;
   name: string;
   category: string;
@@ -170,9 +181,9 @@ export function createScheduledReport(input: {
   filters?: Record<string, unknown>;
   isEnabled?: boolean;
   nextRunAt?: string | null;
-}): ScheduledReport {
+}): Promise<ScheduledReport> {
   const scheduledId = id("sch");
-  execute(
+  (await execute(
     `INSERT INTO scheduled_reports (id, organization_id, name, category, period, day_of_week, day_of_month,
        time_of_day, timezone, recipients, format, station_id, filters, is_enabled, last_run_at, next_run_at,
        created_at, updated_at)
@@ -194,11 +205,11 @@ export function createScheduledReport(input: {
       input.isEnabled === false ? 0 : 1,
       input.nextRunAt ?? null,
     ],
-  );
-  return getScheduledReport(scheduledId)!;
+  ));
+  return (await getScheduledReport(scheduledId))!;
 }
 
-export function updateScheduledReport(scheduledId: string, patch: Record<string, unknown>): ScheduledReport | null {
+export async function updateScheduledReport(scheduledId: string, patch: Record<string, unknown>): Promise<ScheduledReport | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -206,14 +217,14 @@ export function updateScheduledReport(scheduledId: string, patch: Record<string,
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getScheduledReport(scheduledId);
+  if (fields.length === 0) return (await getScheduledReport(scheduledId));
   values.push(scheduledId);
-  execute(`UPDATE scheduled_reports SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getScheduledReport(scheduledId);
+  (await execute(`UPDATE scheduled_reports SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getScheduledReport(scheduledId));
 }
 
-export function deleteScheduledReport(scheduledId: string): void {
-  execute("DELETE FROM scheduled_reports WHERE id = ?", [scheduledId]);
+export async function deleteScheduledReport(scheduledId: string): Promise<void> {
+  (await execute("DELETE FROM scheduled_reports WHERE id = ?", [scheduledId]));
 }
 
 function mapScheduled(row: Record<string, unknown>): ScheduledReport {

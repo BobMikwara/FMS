@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("tanks.view", async (request, ctx) => {
   try {
-    const rows = listFuelTypes(ctx.user.organizationId);
+    const rows = (await listFuelTypes(ctx.user.organizationId));
     return jsonOk({ rows, total: rows.length });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -35,7 +35,7 @@ export const POST = withPermission("fuel_types.manage", async (request, ctx) => 
     if (!/^[a-z0-9_]+$/.test(systemName)) {
       throw new ApiError(422, "The system key may only contain lowercase letters, numbers and underscores.", "validation_error");
     }
-    const existing = listFuelTypes(ctx.user.organizationId);
+    const existing = (await listFuelTypes(ctx.user.organizationId));
     if (existing.some((fuel) => fuel.systemName === systemName)) {
       throw conflict(`A fuel type with the system key "${systemName}" already exists. Choose a different key.`);
     }
@@ -45,18 +45,18 @@ export const POST = withPermission("fuel_types.manage", async (request, ctx) => 
 
     let fuelType;
     try {
-      fuelType = createFuelType({
+      fuelType = (await createFuelType({
         organizationId: ctx.user.organizationId,
         displayName,
         systemName,
         color: str(body.color, "#0f766e"),
         density: optionalNum(body.density),
-      });
+      }));
     } catch (error) {
       uniqueViolation(error, "A fuel type with this system key", "system key");
     }
 
-    audit({
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "fuel_type",
@@ -65,7 +65,7 @@ export const POST = withPermission("fuel_types.manage", async (request, ctx) => 
       summary: `${ctx.user.name} added fuel type ${fuelType.displayName}`,
       next: fuelType,
       request,
-    });
+    }));
     return jsonCreated(fuelType);
   } catch (error) {
     return jsonError(error as Error, request);

@@ -15,7 +15,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("users.view", async (request, ctx) => {
   try {
-    const user = getUser(ctx.params?.userId ?? "");
+    const user = (await getUser(ctx.params?.userId ?? ""));
     if (!user || user.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
     return jsonOk(user);
   } catch (error) {
@@ -26,7 +26,7 @@ export const GET = withPermission("users.view", async (request, ctx) => {
 export const PATCH = withPermission("users.edit", async (request, ctx) => {
   try {
     const userId = ctx.params?.userId ?? "";
-    const existing = getUser(userId);
+    const existing = (await getUser(userId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
 
     const body = await parseJsonBody<Record<string, unknown>>(request);
@@ -35,7 +35,7 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
       if (body[key] !== undefined) patch[key] = body[key];
     }
     if (patch.roleId != null) {
-      const roles = listRoles();
+      const roles = (await listRoles());
       const role = roles.find((row) => row.id === patch.roleId);
       if (!role) throw new ApiError(422, "Select a valid role.", "validation_error");
       if (role.key === "super_admin" && ctx.user.roleKey !== "super_admin") {
@@ -50,17 +50,17 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
       patch.passwordHash = await hashPassword(password);
     }
 
-    const user = updateUser(userId, patch);
+    const user = (await updateUser(userId, patch));
     if (!user) return jsonError(notFound(), request);
 
     if (Array.isArray(body.stationIds)) {
-      const stations = listAllStations(ctx.user.organizationId);
+      const stations = (await listAllStations(ctx.user.organizationId));
       const stationIds = (body.stationIds as string[]).filter((id) => stations.some((station) => station.id === id));
-      setUserStations(userId, stationIds);
+      (await setUserStations(userId, stationIds));
       user.stationIds = stationIds;
     }
 
-    audit({
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "user",
@@ -70,7 +70,7 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
       previous: existing,
       next: user,
       request,
-    });
+    }));
     return jsonOk(user);
   } catch (error) {
     return jsonError(error as Error, request);
@@ -80,17 +80,17 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
 export const DELETE = withPermission("users.delete", async (request, ctx) => {
   try {
     const userId = ctx.params?.userId ?? "";
-    const existing = getUser(userId);
+    const existing = (await getUser(userId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
     if (userId === ctx.user.id) {
       throw new ApiError(422, "You cannot delete your own account.", "validation_error");
     }
-    const owners = listUsers(ctx.user.organizationId).filter((user) => user.roleKey === "super_admin");
+    const owners = (await listUsers(ctx.user.organizationId)).filter((user) => user.roleKey === "super_admin");
     if (existing.roleKey === "super_admin" && owners.length <= 1) {
       throw new ApiError(409, "An organization must keep at least one owner.", "conflict");
     }
-    deleteUser(userId);
-    audit({
+    (await deleteUser(userId));
+    (await audit({
       user: ctx.user,
       action: "deleted",
       entity: "user",
@@ -99,7 +99,7 @@ export const DELETE = withPermission("users.delete", async (request, ctx) => {
       summary: `${ctx.user.name} deleted ${existing.email}`,
       previous: existing,
       request,
-    });
+    }));
     return jsonOk({ id: userId, deleted: true });
   } catch (error) {
     return jsonError(error as Error, request);

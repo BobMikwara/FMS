@@ -4,8 +4,9 @@ The executable schema is [`db/schema.sql`](../db/schema.sql). This document expl
 of the model, the reasoning behind it, and the invariants the application relies on. It is
 generated from the schema, so if the two ever disagree the schema wins.
 
-**21 tables.** Runtime is SQLite (`node:sqlite`); the same shape ports to PostgreSQL by
-swapping the data types listed under [Portability](#portability).
+**22 tables.** Production runs on Supabase PostgreSQL through the async repository adapter;
+SQLite (`node:sqlite`) remains an optional local-development adapter. The versioned PostgreSQL
+baseline lives in `supabase/migrations/0001_initial.sql`.
 
 ---
 
@@ -16,7 +17,7 @@ swapping the data types listed under [Portability](#portability).
 | Primary keys | `TEXT`, cuid-like prefixed ids (`org_`, `usr_`, `stn_`, `tnk_`, `dev_`, `veh_`, `evt_`, `alr_`, `rpt_`…) so the type of a record is obvious in logs and URLs. |
 | Booleans | `INTEGER` `0` / `1`. |
 | Floats | `REAL`. Volumes in **litres**, temperatures in **Celsius**, levels as both `REAL` litres and percent. |
-| Timestamps | `TEXT`, **ISO-8601 UTC** (`2026-09-26T07:33:26Z`). Every default and every write uses `strftime('%Y-%m-%dT%H:%M:%SZ','now')`, so all timestamps sort lexicographically and range queries are correct. |
+| Timestamps | `TEXT`, **ISO-8601 UTC** (`2026-09-26T07:33:26Z`). Every default and every write stores an ISO-8601 UTC string, so timestamps sort lexicographically and range queries are correct. |
 | JSON columns | `TEXT` holding a JSON document (`permissions`, `condition`, `metadata`, `filters`, `recipients`, `previous`, `next`). Small, never queried by the database, and easy to evolve. |
 | Foreign keys | Enforced with `PRAGMA foreign_keys = ON`. Deletion cascades from `organizations` down; records that must survive (readings, audit logs, fuel events) use `ON DELETE SET NULL` on the actor/device side. |
 | Table order | `db/schema.sql` is ordered so no `CREATE TABLE` forward-references a table that does not exist yet. Keep `user_stations` after `stations` and `alert_rules` before `alerts` if the file is rewritten. |
@@ -246,30 +247,31 @@ delete path — the table is the compliance record.
         ▼
    INSERT alerts              + notifications
         ▼
-   realtime bus (SSE)         browser updates without a refresh
+   durable PostgreSQL snapshot stream (bounded SSE / polling)
         ▼
    sweepDeviceHealth()        mark offline / auto-restore, record outage duration
         ▼
    reconcileTank()            opening + refills − consumption vs measured
 ```
 
-Two sweeps run on a timer rather than only on ingest:
+Vercel Cron runs the bounded device-health sweep rather than relying on a process-local background timer:
 
 - **`sweepDeviceHealth`** — a device silent past `deviceOfflineMinutes` is marked offline, its
   tank is marked offline, an alert is raised, and the last valid reading is preserved. When
   data returns the device is restored automatically and the offline alert is resolved with the
   note *“Device communication restored”*.
-- **`reconcileTank`** — compares expected closing stock against the probe reading and raises an
-  alert when the variance exceeds the configured percentage. The alert language is always
-  *“possible anomaly”*, never *“theft”*.
+`reconcileTank` remains a read-model calculation used by tank detail and report generation; it
+compares expected closing stock against the probe reading and raises an alert when the variance
+exceeds the configured percentage. The alert language is always *“possible anomaly”*, never
+*“theft”*.
 
 ---
 
 ## Portability
 
-To move from SQLite to PostgreSQL, change the column types below and the connection string.
-No application code changes — all data access is behind the repositories in
-`src/server/db/repo/`.
+PostgreSQL is the production schema and SQLite is retained for local development. The adapter
+translates the small set of SQLite timestamp expressions used by shared repository SQL, while
+all data access remains behind the repositories in `src/server/db/repo/`.
 
 | SQLite | PostgreSQL |
 | --- | --- |

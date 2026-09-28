@@ -18,11 +18,16 @@ export interface AlertFilter {
   pageSize?: number;
   sort?: string;
   order?: "asc" | "desc";
+  stationIds?: string[];
 }
 
-export function listAlerts(filter: AlertFilter): { rows: Alert[]; total: number } {
+export async function listAlerts(filter: AlertFilter): Promise<{ rows: Alert[]; total: number }> {
   const where: string[] = ["a.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
+  if (filter.stationIds && filter.stationIds.length > 0) {
+    where.push(`a.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+    params.push(...filter.stationIds);
+  }
   if (filter.stationId) {
     where.push("a.station_id = ?");
     params.push(filter.stationId);
@@ -75,49 +80,49 @@ export function listAlerts(filter: AlertFilter): { rows: Alert[]; total: number 
   const sortColumn = sortMap[filter.sort ?? "created_at"] ?? "a.created_at";
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM alerts a ${clause}`, params)?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM alerts a ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(5, filter.pageSize ?? 25));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT a.* FROM alerts a ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapAlert), total };
 }
 
-export function getAlert(alertId: string): Alert | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM alerts WHERE id = ?", [alertId]);
+export async function getAlert(alertId: string): Promise<Alert | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM alerts WHERE id = ?", [alertId]));
   return row ? mapAlert(row) : null;
 }
 
-export function recentAlerts(orgId: string, limit = 8): Alert[] {
-  return query<Record<string, unknown>>(
+export async function recentAlerts(orgId: string, limit = 8): Promise<Alert[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM alerts WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?",
     [orgId, limit],
-  ).map(mapAlert);
+  )).map(mapAlert);
 }
 
-export function activeAlertsForTank(tankId: string, type?: string): Alert[] {
+export async function activeAlertsForTank(tankId: string, type?: string): Promise<Alert[]> {
   const rows = type
-    ? query<Record<string, unknown>>(
+    ? (await query<Record<string, unknown>>(
         "SELECT * FROM alerts WHERE tank_id = ? AND type = ? AND status != 'resolved' ORDER BY created_at DESC",
         [tankId, type],
-      )
-    : query<Record<string, unknown>>(
+      ))
+    : (await query<Record<string, unknown>>(
         "SELECT * FROM alerts WHERE tank_id = ? AND status != 'resolved' ORDER BY created_at DESC",
         [tankId],
-      );
+      ));
   return rows.map(mapAlert);
 }
 
-export function activeAlertsForStation(stationId: string): Alert[] {
-  return query<Record<string, unknown>>(
+export async function activeAlertsForStation(stationId: string): Promise<Alert[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM alerts WHERE station_id = ? AND status != 'resolved' ORDER BY created_at DESC",
     [stationId],
-  ).map(mapAlert);
+  )).map(mapAlert);
 }
 
-export function createAlert(input: {
+export async function createAlert(input: {
   organizationId: string;
   stationId: string;
   tankId?: string | null;
@@ -132,9 +137,9 @@ export function createAlert(input: {
   unit?: string | null;
   threshold?: number | null;
   metadata?: Record<string, unknown> | null;
-}): Alert {
+}): Promise<Alert> {
   const alertId = id("alr");
-  execute(
+  (await execute(
     `INSERT INTO alerts (id, organization_id, station_id, tank_id, device_id, fuel_event_id, rule_id,
        type, severity, title, message, value, unit, threshold, status, metadata, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -155,11 +160,11 @@ export function createAlert(input: {
       input.threshold ?? null,
       input.metadata ? JSON.stringify(input.metadata) : null,
     ],
-  );
-  return getAlert(alertId)!;
+  ));
+  return (await getAlert(alertId))!;
 }
 
-export function updateAlert(alertId: string, patch: Record<string, unknown>): Alert | null {
+export async function updateAlert(alertId: string, patch: Record<string, unknown>): Promise<Alert | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -167,47 +172,47 @@ export function updateAlert(alertId: string, patch: Record<string, unknown>): Al
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getAlert(alertId);
+  if (fields.length === 0) return (await getAlert(alertId));
   values.push(alertId);
-  execute(`UPDATE alerts SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getAlert(alertId);
+  (await execute(`UPDATE alerts SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getAlert(alertId));
 }
 
-export function acknowledgeAlert(alertId: string, userId: string): Alert | null {
-  return updateAlert(alertId, {
+export async function acknowledgeAlert(alertId: string, userId: string): Promise<Alert | null> {
+  return (await updateAlert(alertId, {
     status: "acknowledged",
     acknowledgedAt: new Date().toISOString(),
     acknowledgedById: userId,
-  });
+  }));
 }
 
-export function resolveAlert(alertId: string, userId: string, note?: string): Alert | null {
-  return updateAlert(alertId, {
+export async function resolveAlert(alertId: string, userId: string, note?: string): Promise<Alert | null> {
+  return (await updateAlert(alertId, {
     status: "resolved",
     resolvedAt: new Date().toISOString(),
     resolvedById: userId,
     resolutionNote: note ?? null,
-  });
+  }));
 }
 
-export function reopenAlert(alertId: string): Alert | null {
-  return updateAlert(alertId, { status: "active", resolvedAt: null, resolvedById: null, resolutionNote: null });
+export async function reopenAlert(alertId: string): Promise<Alert | null> {
+  return (await updateAlert(alertId, { status: "active", resolvedAt: null, resolvedById: null, resolutionNote: null }));
 }
 
-export function deleteAlert(alertId: string): void {
-  execute("DELETE FROM alerts WHERE id = ?", [alertId]);
+export async function deleteAlert(alertId: string): Promise<void> {
+  (await execute("DELETE FROM alerts WHERE id = ?", [alertId]));
 }
 
 /* -------------------------------------------------------------------------- */
 /* Alert notes                                                                */
 /* -------------------------------------------------------------------------- */
 
-export function listAlertNotes(alertId: string): (AlertNote & { userName: string })[] {
-  return query<Record<string, unknown>>(
+export async function listAlertNotes(alertId: string): Promise<(AlertNote & { userName: string })[]> {
+  return (await query<Record<string, unknown>>(
     `SELECT n.*, u.name AS user_name FROM alert_notes n JOIN users u ON u.id = n.user_id
      WHERE n.alert_id = ? ORDER BY n.created_at ASC`,
     [alertId],
-  ).map((row) => ({
+  )).map((row) => ({
     id: String(row.id),
     alertId: String(row.alert_id),
     userId: String(row.user_id),
@@ -217,39 +222,39 @@ export function listAlertNotes(alertId: string): (AlertNote & { userName: string
   }));
 }
 
-export function addAlertNote(alertId: string, userId: string, body: string): void {
-  execute("INSERT INTO alert_notes (id, alert_id, user_id, body) VALUES (?, ?, ?, ?)", [
+export async function addAlertNote(alertId: string, userId: string, body: string): Promise<void> {
+  (await execute("INSERT INTO alert_notes (id, alert_id, user_id, body) VALUES (?, ?, ?, ?)", [
     id("anote"),
     alertId,
     userId,
     body,
-  ]);
+  ]));
 }
 
 /* -------------------------------------------------------------------------- */
 /* Alert rules                                                                */
 /* -------------------------------------------------------------------------- */
 
-export function listAlertRules(orgId: string): AlertRule[] {
-  return query<Record<string, unknown>>(
+export async function listAlertRules(orgId: string): Promise<AlertRule[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM alert_rules WHERE organization_id = ? ORDER BY is_enabled DESC, name",
     [orgId],
-  ).map(mapRule);
+  )).map(mapRule);
 }
 
-export function getAlertRule(ruleId: string): AlertRule | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM alert_rules WHERE id = ?", [ruleId]);
+export async function getAlertRule(ruleId: string): Promise<AlertRule | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM alert_rules WHERE id = ?", [ruleId]));
   return row ? mapRule(row) : null;
 }
 
-export function listEnabledRules(orgId: string): AlertRule[] {
-  return query<Record<string, unknown>>(
+export async function listEnabledRules(orgId: string): Promise<AlertRule[]> {
+  return (await query<Record<string, unknown>>(
     "SELECT * FROM alert_rules WHERE organization_id = ? AND is_enabled = 1",
     [orgId],
-  ).map(mapRule);
+  )).map(mapRule);
 }
 
-export function createAlertRule(input: {
+export async function createAlertRule(input: {
   organizationId: string;
   name: string;
   description?: string | null;
@@ -264,9 +269,9 @@ export function createAlertRule(input: {
   channels?: string[];
   isEnabled?: boolean;
   cooldownMin?: number;
-}): AlertRule {
+}): Promise<AlertRule> {
   const ruleId = id("rul");
-  execute(
+  (await execute(
     `INSERT INTO alert_rules (id, organization_id, name, description, type, scope, tank_id, station_id,
        device_id, fuel_type_id, condition, severity, channels, is_enabled, cooldown_min, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -287,11 +292,11 @@ export function createAlertRule(input: {
       input.isEnabled === false ? 0 : 1,
       input.cooldownMin ?? 30,
     ],
-  );
-  return getAlertRule(ruleId)!;
+  ));
+  return (await getAlertRule(ruleId))!;
 }
 
-export function updateAlertRule(ruleId: string, patch: Record<string, unknown>): AlertRule | null {
+export async function updateAlertRule(ruleId: string, patch: Record<string, unknown>): Promise<AlertRule | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -299,14 +304,14 @@ export function updateAlertRule(ruleId: string, patch: Record<string, unknown>):
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getAlertRule(ruleId);
+  if (fields.length === 0) return (await getAlertRule(ruleId));
   values.push(ruleId);
-  execute(`UPDATE alert_rules SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getAlertRule(ruleId);
+  (await execute(`UPDATE alert_rules SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getAlertRule(ruleId));
 }
 
-export function deleteAlertRule(ruleId: string): void {
-  execute("DELETE FROM alert_rules WHERE id = ?", [ruleId]);
+export async function deleteAlertRule(ruleId: string): Promise<void> {
+  (await execute("DELETE FROM alert_rules WHERE id = ?", [ruleId]));
 }
 
 function mapRule(row: Record<string, unknown>): AlertRule {

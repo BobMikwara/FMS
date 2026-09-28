@@ -15,29 +15,28 @@ export const dynamic = "force-dynamic";
 
 const ENV_KEYS = [
   { key: "DATABASE_URL", label: "Database", hint: "SQLite file path or PostgreSQL connection string" },
-  { key: "AUTH_SECRET", label: "Auth secret", hint: "Signs session JWTs — must be long and random" },
+  { key: "AUTH_SECRET", label: "Auth secret", hint: "Signs session JWTs - must be long and random" },
   { key: "AUTH_URL", label: "Auth URL", hint: "Public origin used in password reset links" },
-  { key: "DEVICE_INGEST_KEY", label: "Device ingest key", hint: "Shared secret devices must present on ingest" },
   { key: "REALTIME_TRANSPORT", label: "Realtime transport", hint: "sse or polling" },
-  { key: "DEMO_SIMULATOR", label: "Demo simulator", hint: "on generates synthetic probe traffic" },
+  { key: "DEMO_SIMULATOR", label: "Demo simulator", hint: "on permits explicit local/demo simulator runs" },
   { key: "RATE_LIMIT_MAX", label: "Rate limit", hint: "Requests per window per client" },
-  { key: "SMTP_HOST", label: "SMTP host", hint: "Required before email notifications can be sent" },
-  { key: "SMS_PROVIDER_KEY", label: "SMS provider", hint: "Required before critical SMS alerts can be sent" },
+  { key: "SMTP_HOST", label: "SMTP host", hint: "Required before password reset emails can be sent" },
+  { key: "CRON_SECRET", label: "Cron secret", hint: "Authorizes the Vercel maintenance sweep" },
 ];
 
 export default async function SystemSettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const settings = getSettings(user.organizationId);
+  const settings = (await getSettings(user.organizationId));
   const system = (settings.system ?? {}) as Record<string, unknown>;
 
   const org = user.organizationId;
-  const stations = listAllStations(org).length;
-  const tanks = countTanks(org);
-  const devices = countDevices(org);
-  const vehicles = listAllVehicles(org).length;
-  const readings = countReadings(org);
+  const stations = (await listAllStations(org)).length;
+  const tanks = (await countTanks(org));
+  const devices = (await countDevices(org));
+  const vehicles = (await listAllVehicles(org)).length;
+  const readings = (await countReadings(org));
 
   return (
     <div className="space-y-5">
@@ -83,7 +82,7 @@ export default async function SystemSettingsPage() {
           offlineTimeoutMin: typeof system.offlineTimeoutMin === "number" ? system.offlineTimeoutMin : 15,
           reconciliationVariancePct:
             typeof system.reconciliationVariancePct === "number" ? system.reconciliationVariancePct : 1,
-          simulatorEnabled: process.env.DEMO_SIMULATOR !== "off",
+          simulatorEnabled: process.env.DEMO_SIMULATOR === "on",
           realtimeTransport: process.env.REALTIME_TRANSPORT ?? "sse",
           rateLimitMax: Number(process.env.RATE_LIMIT_MAX ?? 240),
         }}

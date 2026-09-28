@@ -17,12 +17,17 @@ export interface StationFilter {
   page?: number;
   pageSize?: number;
   includeArchived?: boolean;
+  stationIds?: string[];
 }
 
-export function listStations(filter: StationFilter): { rows: Station[]; total: number } {
+export async function listStations(filter: StationFilter): Promise<{ rows: Station[]; total: number }> {
   const where: string[] = ["s.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
   if (!filter.includeArchived) where.push("s.is_archived = 0");
+  if (filter.stationIds && filter.stationIds.length > 0) {
+    where.push(`s.id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+    params.push(...filter.stationIds);
+  }
   if (filter.search) {
     where.push("(s.name LIKE ? OR s.code LIKE ? OR s.city LIKE ? OR s.region LIKE ?)");
     const term = `%${filter.search}%`;
@@ -53,30 +58,30 @@ export function listStations(filter: StationFilter): { rows: Station[]; total: n
   const sortColumn = sortMap[filter.sort ?? "name"] ?? "s.name";
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
-  const total = Number(queryOne<{ n: number }>(`SELECT count(*) AS n FROM stations s ${clause}`, params)?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM stations s ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 24));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT s.* FROM stations s ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapStation), total };
 }
 
-export function listAllStations(orgId: string, includeArchived = false): Station[] {
-  const rows = query<Record<string, unknown>>(
+export async function listAllStations(orgId: string, includeArchived = false): Promise<Station[]> {
+  const rows = (await query<Record<string, unknown>>(
     `SELECT * FROM stations WHERE organization_id = ? ${includeArchived ? "" : "AND is_archived = 0"} ORDER BY name`,
     [orgId],
-  );
+  ));
   return rows.map(mapStation);
 }
 
-export function getStation(stationId: string): Station | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM stations WHERE id = ?", [stationId]);
+export async function getStation(stationId: string): Promise<Station | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM stations WHERE id = ?", [stationId]));
   return row ? mapStation(row) : null;
 }
 
-export function createStation(input: {
+export async function createStation(input: {
   organizationId: string;
   name: string;
   code: string;
@@ -95,9 +100,9 @@ export function createStation(input: {
   currency?: string;
   volumeUnit?: string;
   notes?: string | null;
-}): Station {
+}): Promise<Station> {
   const stationId = id("stn");
-  execute(
+  (await execute(
     `INSERT INTO stations (id, organization_id, name, code, address, city, region, country, phone, email,
        latitude, longitude, status, opening_time, closing_time, timezone, currency, volume_unit, notes, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'))`,
@@ -122,11 +127,11 @@ export function createStation(input: {
       input.volumeUnit ?? "liters",
       input.notes ?? null,
     ],
-  );
-  return getStation(stationId)!;
+  ));
+  return (await getStation(stationId))!;
 }
 
-export function updateStation(stationId: string, patch: Record<string, unknown>): Station | null {
+export async function updateStation(stationId: string, patch: Record<string, unknown>): Promise<Station | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -134,14 +139,14 @@ export function updateStation(stationId: string, patch: Record<string, unknown>)
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getStation(stationId);
+  if (fields.length === 0) return (await getStation(stationId));
   values.push(stationId);
-  execute(`UPDATE stations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getStation(stationId);
+  (await execute(`UPDATE stations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getStation(stationId));
 }
 
-export function deleteStation(stationId: string): void {
-  execute("DELETE FROM stations WHERE id = ?", [stationId]);
+export async function deleteStation(stationId: string): Promise<void> {
+  (await execute("DELETE FROM stations WHERE id = ?", [stationId]));
 }
 
 function mapStation(row: Record<string, unknown>): Station {
@@ -175,28 +180,28 @@ function mapStation(row: Record<string, unknown>): Station {
 /* Fuel types                                                                 */
 /* -------------------------------------------------------------------------- */
 
-export function listFuelTypes(orgId: string, activeOnly = false): FuelType[] {
-  const rows = query<Record<string, unknown>>(
+export async function listFuelTypes(orgId: string, activeOnly = false): Promise<FuelType[]> {
+  const rows = (await query<Record<string, unknown>>(
     `SELECT * FROM fuel_types WHERE organization_id = ? ${activeOnly ? "AND is_active = 1" : ""} ORDER BY system_name`,
     [orgId],
-  );
+  ));
   return rows.map(mapFuelType);
 }
 
-export function getFuelType(fuelTypeId: string): FuelType | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM fuel_types WHERE id = ?", [fuelTypeId]);
+export async function getFuelType(fuelTypeId: string): Promise<FuelType | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM fuel_types WHERE id = ?", [fuelTypeId]));
   return row ? mapFuelType(row) : null;
 }
 
-export function createFuelType(input: {
+export async function createFuelType(input: {
   organizationId: string;
   systemName: string;
   displayName: string;
   color?: string;
   density?: number | null;
-}): FuelType {
+}): Promise<FuelType> {
   const fuelTypeId = id("ft");
-  execute(
+  (await execute(
     `INSERT INTO fuel_types (id, organization_id, system_name, display_name, color, density)
      VALUES (?, ?, ?, ?, ?, ?)`,
     [
@@ -207,11 +212,11 @@ export function createFuelType(input: {
       input.color ?? "#3b82f6",
       input.density ?? null,
     ],
-  );
-  return getFuelType(fuelTypeId)!;
+  ));
+  return (await getFuelType(fuelTypeId))!;
 }
 
-export function updateFuelType(fuelTypeId: string, patch: Record<string, unknown>): FuelType | null {
+export async function updateFuelType(fuelTypeId: string, patch: Record<string, unknown>): Promise<FuelType | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -219,14 +224,14 @@ export function updateFuelType(fuelTypeId: string, patch: Record<string, unknown
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getFuelType(fuelTypeId);
+  if (fields.length === 0) return (await getFuelType(fuelTypeId));
   values.push(fuelTypeId);
-  execute(`UPDATE fuel_types SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getFuelType(fuelTypeId);
+  (await execute(`UPDATE fuel_types SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getFuelType(fuelTypeId));
 }
 
-export function deleteFuelType(fuelTypeId: string): void {
-  execute("DELETE FROM fuel_types WHERE id = ?", [fuelTypeId]);
+export async function deleteFuelType(fuelTypeId: string): Promise<void> {
+  (await execute("DELETE FROM fuel_types WHERE id = ?", [fuelTypeId]));
 }
 
 function mapFuelType(row: Record<string, unknown>): FuelType {
@@ -262,7 +267,7 @@ export interface TankFilter {
   stationIds?: string[];
 }
 
-export function listTanks(filter: TankFilter): { rows: Tank[]; total: number } {
+export async function listTanks(filter: TankFilter): Promise<{ rows: Tank[]; total: number }> {
   const where: string[] = ["t.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
   if (!filter.includeArchived) where.push("t.is_archived = 0");
@@ -302,32 +307,32 @@ export function listTanks(filter: TankFilter): { rows: Tank[]; total: number } {
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
   const total = Number(
-    queryOne<{ n: number }>(`SELECT count(*) AS n FROM tanks t JOIN stations s ON s.id = t.station_id ${clause}`, params)
+    (await queryOne<{ n: number }>(`SELECT count(*) AS n FROM tanks t JOIN stations s ON s.id = t.station_id ${clause}`, params))
       ?.n ?? 0,
   );
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 24));
-  const rows = query<Record<string, unknown>>(
+  const rows = (await query<Record<string, unknown>>(
     `SELECT t.* FROM tanks t JOIN stations s ON s.id = t.station_id ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
-  );
+  ));
   return { rows: rows.map(mapTank), total };
 }
 
-export function listAllTanks(orgId: string, includeArchived = false): Tank[] {
-  const rows = query<Record<string, unknown>>(
+export async function listAllTanks(orgId: string, includeArchived = false): Promise<Tank[]> {
+  const rows = (await query<Record<string, unknown>>(
     `SELECT * FROM tanks WHERE organization_id = ? ${includeArchived ? "" : "AND is_archived = 0"} ORDER BY name`,
     [orgId],
-  );
+  ));
   return rows.map(mapTank);
 }
 
-export function getTank(tankId: string): Tank | null {
-  const row = queryOne<Record<string, unknown>>("SELECT * FROM tanks WHERE id = ?", [tankId]);
+export async function getTank(tankId: string): Promise<Tank | null> {
+  const row = (await queryOne<Record<string, unknown>>("SELECT * FROM tanks WHERE id = ?", [tankId]));
   return row ? mapTank(row) : null;
 }
 
-export function createTank(input: {
+export async function createTank(input: {
   organizationId: string;
   stationId: string;
   fuelTypeId: string;
@@ -343,9 +348,9 @@ export function createTank(input: {
   criticalThresholdPct?: number;
   overfillThresholdPct?: number;
   notes?: string | null;
-}): Tank {
+}): Promise<Tank> {
   const tankId = id("tnk");
-  execute(
+  (await execute(
     `INSERT INTO tanks (id, organization_id, station_id, fuel_type_id, name, code, capacity, current_volume,
        tank_type, manufacturer, installation_date, min_level, low_threshold_pct, critical_threshold_pct,
        overfill_threshold_pct, notes, created_at, updated_at)
@@ -368,11 +373,11 @@ export function createTank(input: {
       input.overfillThresholdPct ?? 95,
       input.notes ?? null,
     ],
-  );
-  return getTank(tankId)!;
+  ));
+  return (await getTank(tankId))!;
 }
 
-export function updateTank(tankId: string, patch: Record<string, unknown>): Tank | null {
+export async function updateTank(tankId: string, patch: Record<string, unknown>): Promise<Tank | null> {
   const fields: string[] = [];
   const values: unknown[] = [];
   for (const [key, value] of Object.entries(patch)) {
@@ -380,38 +385,38 @@ export function updateTank(tankId: string, patch: Record<string, unknown>): Tank
     fields.push(`${snake(key)} = ?`);
     values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
   }
-  if (fields.length === 0) return getTank(tankId);
+  if (fields.length === 0) return (await getTank(tankId));
   values.push(tankId);
-  execute(`UPDATE tanks SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values);
-  return getTank(tankId);
+  (await execute(`UPDATE tanks SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
+  return (await getTank(tankId));
 }
 
-export function deleteTank(tankId: string): void {
-  execute("DELETE FROM tanks WHERE id = ?", [tankId]);
+export async function deleteTank(tankId: string): Promise<void> {
+  (await execute("DELETE FROM tanks WHERE id = ?", [tankId]));
 }
 
-export function countTanks(orgId: string, stationId?: string): number {
+export async function countTanks(orgId: string, stationId?: string): Promise<number> {
   const row = stationId
-    ? queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks WHERE organization_id = ? AND station_id = ?", [
+    ? (await queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks WHERE organization_id = ? AND station_id = ?", [
         orgId,
         stationId,
-      ])
-    : queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks WHERE organization_id = ?", [orgId]);
+      ]))
+    : (await queryOne<{ n: number }>("SELECT count(*) AS n FROM tanks WHERE organization_id = ?", [orgId]));
   return Number(row?.n ?? 0);
 }
 
-export function stationRegions(orgId: string): string[] {
-  return query<{ region: string }>(
+export async function stationRegions(orgId: string): Promise<string[]> {
+  return (await query<{ region: string }>(
     "SELECT DISTINCT region FROM stations WHERE organization_id = ? AND region != '' ORDER BY region",
     [orgId],
-  ).map((r) => r.region);
+  )).map((r) => r.region);
 }
 
-export function stationCities(orgId: string): string[] {
-  return query<{ city: string }>(
+export async function stationCities(orgId: string): Promise<string[]> {
+  return (await query<{ city: string }>(
     "SELECT DISTINCT city FROM stations WHERE organization_id = ? AND city != '' ORDER BY city",
     [orgId],
-  ).map((r) => r.city);
+  )).map((r) => r.city);
 }
 
 function mapTank(row: Record<string, unknown>): Tank {

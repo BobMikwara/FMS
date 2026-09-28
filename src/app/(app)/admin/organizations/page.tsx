@@ -14,7 +14,7 @@ export default async function OrganizationsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const organizations = listOrganizations();
+  const organizations = (await listOrganizations());
 
   return (
     <div className="space-y-5">
@@ -30,8 +30,8 @@ export default async function OrganizationsPage() {
       </Notice>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        {organizations.map((org) => {
-          const stations = listAllStations(org.id);
+        {organizations.map(async (org) => {
+          const stations = (await listAllStations(org.id));
           const isCurrent = org.id === user.organizationId;
           return (
             <section key={org.id} className="card p-5">
@@ -76,7 +76,7 @@ export default async function OrganizationsPage() {
                         <MapPin size={13} className="shrink-0 text-[var(--ink-3)]" />
                         <span className="truncate">{station.name}</span>
                         <span className="text-num ml-auto shrink-0 text-[0.75rem] text-[var(--ink-3)]">
-                          {station.city ?? "—"}
+                          {station.city ?? "-"}
                         </span>
                       </li>
                     ))}

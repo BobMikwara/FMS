@@ -15,7 +15,7 @@ import { listAllStations, listAllTanks, listFuelTypes } from "@/server/db/repo/s
 import { listEvents } from "@/server/db/repo/events";
 import { listAlerts } from "@/server/db/repo/alerts";
 import { listAllVehicles, listAllDevices } from "@/server/db/repo/devices";
-import { listAuditLogs } from "@/server/db/repo/core";
+import { listAuditLogs, listUsers } from "@/server/db/repo/core";
 import { buildDashboard, buildStationDetail } from "@/server/services/analytics";
 import { reconcileTank, stockCoverage } from "@/server/engine/fuel";
 import type { Report } from "@/server/domain/types";
@@ -40,17 +40,39 @@ function empty(message: string): ReportTable {
 /* Movement ledger                                                            */
 /* -------------------------------------------------------------------------- */
 
-function movementRows(orgId: string, from: string, to: string, type?: string): ReportTable {
-  const result = listEvents({ orgId, type, from, to, pageSize: 5000 });
+export function reportStationId(report: Report): string | null {
+  const stationId = report.filters.stationId;
+  return typeof stationId === "string" && stationId.length > 0 ? stationId : null;
+}
+
+export function reportStationIsAllowed(report: Report, allowedStationIds?: string[]): boolean {
+  const selectedStationId = reportStationId(report);
+  return !allowedStationIds || allowedStationIds.length === 0 || !selectedStationId || allowedStationIds.includes(selectedStationId);
+}
+
+function reportStationScope(report: Report, allowedStationIds?: string[]): string[] | undefined {
+  const selectedStationId = reportStationId(report);
+  if (selectedStationId) return [selectedStationId];
+  return allowedStationIds && allowedStationIds.length > 0 ? allowedStationIds : undefined;
+}
+
+async function movementRows(
+  orgId: string,
+  from: string,
+  to: string,
+  type?: string,
+  stationIds?: string[],
+): Promise<ReportTable> {
+  const result = (await listEvents({ orgId, type, from, to, pageSize: 5000, stationIds }));
   if (result.rows.length === 0) {
     return empty("No movements were recorded in this period.");
   }
 
-  const stationName = new Map(listAllStations(orgId).map((station) => [station.id, station.name]));
-  const tankName = new Map(listAllTanks(orgId).map((tank) => [tank.id, tank.name]));
-  const fuelLabel = new Map(listFuelTypes(orgId).map((fuel) => [fuel.id, fuel.displayName]));
-  const deviceSerial = new Map(listAllDevices(orgId).map((device) => [device.id, device.serialNumber]));
-  const tankFuel = new Map(listAllTanks(orgId).map((tank) => [tank.id, tank.fuelTypeId]));
+  const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
+  const tankName = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.name]));
+  const fuelLabel = new Map((await listFuelTypes(orgId)).map((fuel) => [fuel.id, fuel.displayName]));
+  const deviceSerial = new Map((await listAllDevices(orgId)).map((device) => [device.id, device.serialNumber]));
+  const tankFuel = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.fuelTypeId]));
 
   return {
     headers: [
@@ -86,27 +108,31 @@ function movementRows(orgId: string, from: string, to: string, type?: string): R
 /* Main dispatcher                                                            */
 /* -------------------------------------------------------------------------- */
 
-export function buildReportTable(report: Report): ReportTable {
+export async function buildReportTable(report: Report, allowedStationIds?: string[]): Promise<ReportTable> {
   const orgId = report.organizationId;
   const from = report.dateFrom;
   const to = report.dateTo;
+  if (!reportStationIsAllowed(report, allowedStationIds)) {
+    throw new Error("Report station is outside the current user's station scope.");
+  }
+  const stationIds = reportStationScope(report, allowedStationIds);
 
   switch (report.category) {
     case "consumption":
-      return movementRows(orgId, from, to, "consumption");
+      return (await movementRows(orgId, from, to, "consumption", stationIds));
 
     case "refills":
-      return movementRows(orgId, from, to, "refill");
+      return (await movementRows(orgId, from, to, "refill", stationIds));
 
     case "movements":
     case "ledger":
-      return movementRows(orgId, from, to);
+      return (await movementRows(orgId, from, to, undefined, stationIds));
 
     case "inventory": {
-      const tanks = listAllTanks(orgId);
+      const tanks = (await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId));
       if (tanks.length === 0) return empty("No tanks have been added yet.");
-      const stationName = new Map(listAllStations(orgId).map((station) => [station.id, station.name]));
-      const fuelLabel = new Map(listFuelTypes(orgId).map((fuel) => [fuel.id, fuel.displayName]));
+      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
+      const fuelLabel = new Map((await listFuelTypes(orgId)).map((fuel) => [fuel.id, fuel.displayName]));
       return {
         headers: ["Station", "Tank", "Fuel type", "Capacity (L)", "Volume (L)", "Level (%)", "Last reading (UTC)"],
         rows: tanks.map((tank) => [
@@ -122,9 +148,9 @@ export function buildReportTable(report: Report): ReportTable {
     }
 
     case "reconciliation": {
-      const tanks = listAllTanks(orgId);
+      const tanks = (await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId));
       if (tanks.length === 0) return empty("No tanks have been added yet.");
-      const stationName = new Map(listAllStations(orgId).map((station) => [station.id, station.name]));
+      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
       return {
         headers: [
           "Station",
@@ -139,9 +165,9 @@ export function buildReportTable(report: Report): ReportTable {
           "Avg daily consumption (L)",
           "Estimated days remaining",
         ],
-        rows: tanks.map((tank) => {
-          const reconciliation = reconcileTank(tank.id, from, to);
-          const coverage = stockCoverage(tank.id, 7);
+        rows: await Promise.all(tanks.map(async (tank) => {
+          const reconciliation = (await reconcileTank(tank.id, from, to));
+          const coverage = (await stockCoverage(tank.id, 7));
           return [
             stationName.get(tank.stationId) ?? "—",
             tank.name,
@@ -155,15 +181,15 @@ export function buildReportTable(report: Report): ReportTable {
             nf(coverage.avgDailyConsumption),
             coverage.daysRemaining == null ? NOT_AVAILABLE : nf(coverage.daysRemaining, 1),
           ];
-        }),
+        })),
       };
     }
 
     case "alerts": {
-      const result = listAlerts({ orgId, from, to, pageSize: 5000 });
+      const result = (await listAlerts({ orgId, from, to, pageSize: 5000, stationIds }));
       if (result.rows.length === 0) return empty("No alerts were raised in this period.");
-      const stationName = new Map(listAllStations(orgId).map((station) => [station.id, station.name]));
-      const tankName = new Map(listAllTanks(orgId).map((tank) => [tank.id, tank.name]));
+      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
+      const tankName = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.name]));
       return {
         headers: [
           "Raised (UTC)",
@@ -195,11 +221,12 @@ export function buildReportTable(report: Report): ReportTable {
     }
 
     case "vehicles": {
-      const vehicles = listAllVehicles(orgId);
+      const vehicles = (await listAllVehicles(orgId)).filter((vehicle) => !stationIds || (vehicle.stationId != null && stationIds.includes(vehicle.stationId)));
       if (vehicles.length === 0) return empty("No vehicles have been added yet.");
+      const vehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
       const deviceSerial = new Map(
-        listAllDevices(orgId)
-          .filter((device) => device.vehicleId)
+        (await listAllDevices(orgId))
+          .filter((device) => device.vehicleId && vehicleIds.has(device.vehicleId))
           .map((device) => [device.vehicleId as string, device.serialNumber]),
       );
       return {
@@ -218,7 +245,16 @@ export function buildReportTable(report: Report): ReportTable {
     }
 
     case "audit": {
-      const logs = listAuditLogs({ orgId, from, to, pageSize: 5000 }).rows;
+      const users = stationIds
+        ? (await listUsers(orgId)).filter((user) => user.stationIds.length === 0 || user.stationIds.some((stationId) => stationIds.includes(stationId)))
+        : [];
+      const logs = (await listAuditLogs({
+        orgId,
+        from,
+        to,
+        pageSize: 5000,
+        userIds: stationIds ? users.map((user) => user.id) : undefined,
+      })).rows;
       if (logs.length === 0) return empty("No audit entries in this period.");
       return {
         headers: ["Timestamp (UTC)", "User", "Action", "Record", "Record type", "Detail", "IP address"],
@@ -235,7 +271,7 @@ export function buildReportTable(report: Report): ReportTable {
     }
 
     case "stations": {
-      const stations = listAllStations(orgId);
+      const stations = (await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id));
       if (stations.length === 0) return empty("No stations have been added yet.");
       return {
         headers: [
@@ -250,8 +286,8 @@ export function buildReportTable(report: Report): ReportTable {
           "Refills (L)",
           "Status",
         ],
-        rows: stations.map((station) => {
-          const detail = buildStationDetail(station.id, "7d");
+        rows: await Promise.all(stations.map(async (station) => {
+          const detail = (await buildStationDetail(station.id, "7d"));
           return [
             station.name,
             station.city,
@@ -264,13 +300,13 @@ export function buildReportTable(report: Report): ReportTable {
             detail ? nf(detail.todayRefills) : NOT_AVAILABLE,
             station.status,
           ];
-        }),
+        })),
       };
     }
 
     case "summary":
     default: {
-      const dashboard = buildDashboard(orgId, "7d");
+      const dashboard = (await buildDashboard(orgId, "7d", stationIds));
       const k = dashboard.kpis;
       return {
         headers: ["Metric", "Value", "Unit / note"],

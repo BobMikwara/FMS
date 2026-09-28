@@ -195,10 +195,10 @@ export function FuelReplay({ tankId, tankName, capacity }: { tankId: string; tan
 
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Readout label="Playhead" value={point ? formatDateTime(point.ts) : "—"} />
-            <Readout label="Volume" value={point ? `${formatNumber(Math.round(point.volumeLiters))} L` : "—"} />
-            <Readout label="Level" value={point ? `${point.levelPercent.toFixed(1)}%` : "—"} />
-            <Readout label="Temperature" value={point?.temperatureC == null ? "—" : `${point.temperatureC.toFixed(1)} °C`} />
+            <Readout label="Playhead" value={point ? formatDateTime(point.ts) : "-"} />
+            <Readout label="Volume" value={point ? `${formatNumber(Math.round(point.volumeLiters))} L` : "-"} />
+            <Readout label="Level" value={point ? `${point.levelPercent.toFixed(1)}%` : "-"} />
+            <Readout label="Temperature" value={point?.temperatureC == null ? "-" : `${point.temperatureC.toFixed(1)} °C`} />
           </div>
 
           <div>

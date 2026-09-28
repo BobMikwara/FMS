@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export const PATCH = withPermission("integrations.manage", async (request, ctx) => {
   try {
     const integrationId = ctx.params?.integrationId ?? "";
-    const existing = getIntegration(integrationId);
+    const existing = (await getIntegration(integrationId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
 
     const body = await parseJsonBody<Record<string, unknown>>(request);
@@ -26,9 +26,9 @@ export const PATCH = withPermission("integrations.manage", async (request, ctx) 
       patch.secretRef = `env:${existing.kind.toUpperCase()}_${existing.provider.toUpperCase()}_SECRET`;
     }
 
-    const integration = updateIntegration(integrationId, patch);
+    const integration = (await updateIntegration(integrationId, patch));
     if (!integration) return jsonError(notFound(), request);
-    audit({
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "integration",
@@ -38,7 +38,7 @@ export const PATCH = withPermission("integrations.manage", async (request, ctx) 
       previous: existing,
       next: { ...integration, config: undefined },
       request,
-    });
+    }));
     return jsonOk({
       ...integration,
       config: undefined,

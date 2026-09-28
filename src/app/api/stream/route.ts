@@ -1,10 +1,10 @@
 import { latestReadingForTank } from "@/server/db/repo/readings";
 import { listStations, listTanks } from "@/server/db/repo/stations";
 import { getCurrentUser } from "@/server/auth/session";
-import { getBus, type RealtimeEvent } from "@/server/realtime/bus";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 /**
  * Server-Sent Events stream (PRD §56).
@@ -26,15 +26,12 @@ export async function GET(request: Request) {
   const encoder = new TextEncoder();
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let closed = false;
-  let unsubscribe: (() => void) | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const cleanup = () => {
     closed = true;
     if (timer) clearInterval(timer);
     timer = null;
-    unsubscribe?.();
-    unsubscribe = null;
   };
 
   const send = (event: string, data: unknown) => {
@@ -46,10 +43,11 @@ export async function GET(request: Request) {
     }
   };
 
-  const bus = getBus();
-  unsubscribe = bus.subscribe((event: RealtimeEvent) => send(event.type, event));
-
-  const tick = () => send("tick", buildSnapshot(user.organizationId));
+  // The stream reads durable state from PostgreSQL rather than subscribing to a
+  // process-local event bus. That keeps updates correct when Vercel scales across
+  // many short-lived function instances; clients reconnect after the bounded
+  // function lifetime.
+  const tick = async () => { send("tick", await buildSnapshot(user.organizationId)); };
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -59,8 +57,8 @@ export async function GET(request: Request) {
       } catch {
         /* client already gone */
       }
-      tick();
-      timer = setInterval(tick, 3000);
+      void tick();
+      timer = setInterval(() => { void tick(); }, 3000);
     },
     cancel() {
       cleanup();
@@ -79,11 +77,11 @@ export async function GET(request: Request) {
   });
 }
 
-function buildSnapshot(organizationId: string) {
+async function buildSnapshot(organizationId: string) {
   try {
-    const tanks = listTanks({ orgId: organizationId, pageSize: 200, includeArchived: false }).rows;
-    const levels = tanks.map((tank) => {
-      const reading = latestReadingForTank(tank.id);
+    const tanks = (await listTanks({ orgId: organizationId, pageSize: 200, includeArchived: false })).rows;
+    const levels = await Promise.all(tanks.map(async (tank) => {
+      const reading = (await latestReadingForTank(tank.id));
       return {
         tankId: tank.id,
         levelPercent: reading?.levelPercent ?? null,
@@ -91,8 +89,8 @@ function buildSnapshot(organizationId: string) {
         state: reading ? classify(tank, reading.volumeLiters) : "unknown",
         ts: reading?.ts ?? null,
       };
-    });
-    const stations = listStations({ orgId: organizationId, pageSize: 200 }).rows;
+    }));
+    const stations = (await listStations({ orgId: organizationId, pageSize: 200 })).rows;
     return {
       at: new Date().toISOString(),
       totalFuel: levels.reduce((sum, level) => sum + (level.volumeLiters ?? 0), 0),

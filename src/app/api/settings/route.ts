@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("settings.view", async (request, ctx) => {
   try {
-    return jsonOk(getSettings(ctx.user.organizationId));
+    return jsonOk((await getSettings(ctx.user.organizationId)));
   } catch (error) {
     return jsonError(error as Error, request);
   }
@@ -25,8 +25,8 @@ export const PATCH = withPermission("settings.manage", async (request, ctx) => {
     if (Object.keys(groups).length === 0) {
       return jsonError(unprocessable("Provide at least one settings group to update."));
     }
-    const settings = setSettings(ctx.user.organizationId, groups);
-    audit({
+    const settings = (await setSettings(ctx.user.organizationId, groups));
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "settings",
@@ -35,7 +35,7 @@ export const PATCH = withPermission("settings.manage", async (request, ctx) => {
       summary: `${ctx.user.name} updated settings (${Object.keys(groups).join(", ")})`,
       next: groups,
       request,
-    });
+    }));
     return jsonOk(settings);
   } catch (error) {
     return jsonError(error as Error, request);

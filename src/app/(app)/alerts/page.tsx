@@ -10,9 +10,17 @@ export default async function AlertsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const { rows } = listAlerts({ orgId: user.organizationId, pageSize: 50 });
-  const stations = listAllStations(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
+  const { rows } = (await listAlerts({
+    orgId: user.organizationId,
+    pageSize: 50,
+    stationIds: user.stationIds.length > 0 ? user.stationIds : undefined,
+  }));
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const tanks = (await listAllTanks(user.organizationId)).filter(
+    (tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId),
+  );
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
   const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
 

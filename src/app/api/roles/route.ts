@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 export const GET = withPermission("roles.view", async (request, ctx) => {
   try {
     // Roles are system-wide definitions; the org is carried by the users that hold them.
-    const roles = listRoles();
+    const roles = (await listRoles());
     return jsonOk({ rows: roles, total: roles.length });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -24,11 +24,11 @@ export const PATCH = withPermission("roles.manage", async (request, ctx) => {
     if (!body.id) {
       return jsonError(unprocessable("Role id is required."));
     }
-    const existing = listRoles().find((role) => role.id === body.id);
+    const existing = (await listRoles()).find((role) => role.id === body.id);
     if (!existing) return jsonError(notFound(), request);
-    const role = updateRole(body.id, { name: body.name, description: body.description });
+    const role = (await updateRole(body.id, { name: body.name, description: body.description }));
     if (!role) return jsonError(notFound(), request);
-    audit({
+    (await audit({
       user: ctx.user,
       action: "updated",
       entity: "role",
@@ -38,7 +38,7 @@ export const PATCH = withPermission("roles.manage", async (request, ctx) => {
       previous: existing,
       next: role,
       request,
-    });
+    }));
     return jsonOk(role);
   } catch (error) {
     return jsonError(error as Error, request);

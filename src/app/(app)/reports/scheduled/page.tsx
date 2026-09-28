@@ -6,7 +6,6 @@ import { listScheduledReports } from "@/server/db/repo/reports";
 import { listAllStations } from "@/server/db/repo/stations";
 import { listUsers } from "@/server/db/repo/core";
 import { PageHeader, Notice } from "@/components/ui/layout";
-import { EmptyState } from "@/components/ui/feedback";
 import { ScheduledReportsBrowser } from "./scheduled-reports-browser";
 import { REPORT_CATEGORIES } from "@/lib/report-categories";
 
@@ -18,9 +17,11 @@ export default async function ScheduledReportsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const scheduled = listScheduledReports(user.organizationId);
-  const stations = listAllStations(user.organizationId);
-  const users = listUsers(user.organizationId);
+  const scheduled = (await listScheduledReports(user.organizationId, user.stationIds));
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const users = (await listUsers(user.organizationId));
 
   const rows = scheduled.map((entry) => ({
     id: entry.id,
@@ -59,24 +60,12 @@ export default async function ScheduledReportsPage() {
         written to the audit log. If a recipient address bounces, the failure is recorded rather than swallowed.
       </Notice>
 
-      {rows.length === 0 ? (
-        <EmptyState
-          icon="report"
-          title="No scheduled reports yet"
-          description="Set up a daily or weekly report and it will generate and deliver itself without anyone remembering to run it."
-          action={
-            <Link href="/reports/scheduled" className="btn btn-primary btn-sm">
-              Schedule a report
-            </Link>
-          }
-        />
-      ) : (
-        <ScheduledReportsBrowser
-          initialRows={rows}
-          stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
-          recipientOptions={users.map((entry) => entry.email)}
-        />
-      )}
+      <ScheduledReportsBrowser
+        initialRows={rows}
+        stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
+        recipientOptions={users.map((entry) => entry.email)}
+        allowAllStations={user.stationIds.length === 0}
+      />
 
       <section className="card p-5">
         <h2 className="flex items-center gap-2 text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">
@@ -85,13 +74,13 @@ export default async function ScheduledReportsPage() {
         </h2>
         <ul className="mt-3 space-y-1.5 text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
           <li>
-            <strong className="font-medium text-[var(--ink)]">Daily</strong> — generated every day at the time you pick.
+            <strong className="font-medium text-[var(--ink)]">Daily</strong> - generated every day at the time you pick.
           </li>
           <li>
-            <strong className="font-medium text-[var(--ink)]">Weekly</strong> — generated on the day of the week you pick.
+            <strong className="font-medium text-[var(--ink)]">Weekly</strong> - generated on the day of the week you pick.
           </li>
           <li>
-            <strong className="font-medium text-[var(--ink)]">Monthly</strong> — generated on the day of the month you pick.
+            <strong className="font-medium text-[var(--ink)]">Monthly</strong> - generated on the day of the month you pick.
           </li>
         </ul>
         <p className="mt-3 flex items-center gap-2 text-[0.75rem] text-[var(--ink-3)]">

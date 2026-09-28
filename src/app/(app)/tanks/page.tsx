@@ -10,8 +10,11 @@ export default async function TanksPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const tanks = listAllTanks(user.organizationId).filter((tank) => !tank.isArchived);
-  const stations = listAllStations(user.organizationId);
+  const allStations = await listAllStations(user.organizationId);
+  const stations = allStations.filter((station) => user.stationIds.length === 0 || user.stationIds.includes(station.id));
+  const tanks = (await listAllTanks(user.organizationId))
+    .filter((tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId))
+    .filter((tank) => !tank.isArchived);
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
 
   const rows = tanks.map((tank) => {
@@ -51,7 +54,7 @@ export default async function TanksPage() {
       <TanksBrowser
         initialRows={rows}
         stations={stations.map((station) => ({ id: station.id, name: station.name }))}
-        fuelTypes={listFuelTypes(user.organizationId).map((fuelType) => ({
+        fuelTypes={(await listFuelTypes(user.organizationId)).map((fuelType) => ({
           id: fuelType.id,
           name: fuelType.displayName,
           color: fuelType.color,

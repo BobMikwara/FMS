@@ -96,14 +96,14 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
         header: "Tank capacity",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.tankCapacity == null ? "—" : `${formatNumber(Math.round(row.tankCapacity))} L`),
+        cell: (row) => (row.tankCapacity == null ? "-" : `${formatNumber(Math.round(row.tankCapacity))} L`),
       },
       {
         key: "odometer",
         header: "Odometer",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.odometerKm == null ? "—" : `${formatNumber(Math.round(row.odometerKm))} km`),
+        cell: (row) => (row.odometerKm == null ? "-" : `${formatNumber(Math.round(row.odometerKm))} km`),
       },
       {
         key: "tracker",

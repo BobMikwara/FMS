@@ -1,5 +1,5 @@
 import { getReport } from "@/server/db/repo/reports";
-import { buildReportTable } from "@/server/services/report-builder";
+import { buildReportTable, reportStationIsAllowed } from "@/server/services/report-builder";
 import { toCsv } from "@/lib/export";
 import { audit, jsonError, notFound, withPermission } from "@/server/api/route";
 
@@ -25,12 +25,12 @@ const EXTENSION: Record<string, string> = {
  */
 export const GET = withPermission("reports.view", async (request, ctx) => {
   try {
-    const report = getReport(ctx.params?.reportId ?? "");
-    if (!report || report.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
+    const report = (await getReport(ctx.params?.reportId ?? ""));
+    if (!report || report.organizationId !== ctx.user.organizationId || !reportStationIsAllowed(report, ctx.user.stationIds)) return jsonError(notFound(), request);
 
     const requested = new URL(request.url).searchParams.get("format") ?? report.format;
     const format = MIME[requested] ? requested : "csv";
-    const table = buildReportTable(report);
+    const table = (await buildReportTable(report, ctx.user.stationIds));
 
     const filename = `${report.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "report"}-${report.id}.${EXTENSION[format]}`;
     let body: string;
@@ -76,7 +76,7 @@ export const GET = withPermission("reports.view", async (request, ctx) => {
       ].join("");
     }
 
-    audit({
+    (await audit({
       user: ctx.user,
       action: "exported",
       entity: "report",
@@ -85,7 +85,7 @@ export const GET = withPermission("reports.view", async (request, ctx) => {
       summary: `${ctx.user.name} exported report "${report.title}" as ${format.toUpperCase()}`,
       next: { format, rows: table.rows.length },
       request,
-    });
+    }));
 
     return new Response(body, {
       headers: {

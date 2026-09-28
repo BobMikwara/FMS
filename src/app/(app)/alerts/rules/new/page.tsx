@@ -31,9 +31,13 @@ const RULE_TYPES = [
 export default async function NewRulePage() {
   const user = await getCurrentUser();
   if (!user) return null;
-  const tanks = listAllTanks(user.organizationId).filter((tank) => !tank.isArchived);
-  const stations = listAllStations(user.organizationId).filter((station) => !station.isArchived);
-  const fuelTypes = listFuelTypes(user.organizationId);
+  const tanks = (await listAllTanks(user.organizationId))
+    .filter((tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId))
+    .filter((tank) => !tank.isArchived);
+  const stations = (await listAllStations(user.organizationId))
+    .filter((station) => user.stationIds.length === 0 || user.stationIds.includes(station.id))
+    .filter((station) => !station.isArchived);
+  const fuelTypes = (await listFuelTypes(user.organizationId));
 
   return (
     <div className="space-y-5">

@@ -87,7 +87,7 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
       {invitedEmail ? (
         <Notice tone="ok" title="User invited">
           {invitedEmail} can now sign in. Temporary password:{" "}
-          <code className="rounded bg-[var(--surface-3)] px-1.5 py-0.5 text-[0.75rem]">{temporaryPassword}</code> — they
+          <code className="rounded bg-[var(--surface-3)] px-1.5 py-0.5 text-[0.75rem]">{temporaryPassword}</code> - they
           should change it after their first sign-in.
         </Notice>
       ) : null}

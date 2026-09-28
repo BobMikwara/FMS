@@ -154,14 +154,14 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
         header: "Signal",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.signalStrength == null ? "—" : `${row.signalStrength}`),
+        cell: (row) => (row.signalStrength == null ? "-" : `${row.signalStrength}`),
       },
       {
         key: "battery",
         header: "Battery",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (row.batteryPct == null ? "—" : `${row.batteryPct}%`),
+        cell: (row) => (row.batteryPct == null ? "-" : `${row.batteryPct}%`),
       },
       {
         key: "actions",

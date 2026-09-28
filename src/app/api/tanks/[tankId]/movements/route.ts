@@ -8,12 +8,16 @@ export const dynamic = "force-dynamic";
 export const GET = withPermission("movements.view", async (request, ctx) => {
   try {
     const tankId = ctx.params?.tankId ?? "";
-    const tank = getTank(tankId);
-    if (!tank || tank.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
+    const tank = (await getTank(tankId));
+    if (
+      !tank ||
+      tank.organizationId !== ctx.user.organizationId ||
+      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+    ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 30);
-    const result = listEvents({
+    const result = (await listEvents({
       orgId: ctx.user.organizationId,
       tankId,
       type: params.get("type") ?? undefined,
@@ -22,7 +26,7 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
       to: params.get("to") ?? new Date().toISOString(),
       page,
       pageSize,
-    });
+    }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);

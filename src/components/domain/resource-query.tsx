@@ -8,7 +8,7 @@ import { downloadCsv, downloadExcel, exportFilename } from "@/lib/export";
  *
  * Pages are server-rendered with their first page of data (so there is never a
  * blank screen), then this hook takes over for search, filtering, sorting and
- * pagination. Errors are surfaced as a retry-able message — never a raw stack
+ * pagination. Errors are surfaced as a retry-able message - never a raw stack
  * trace (PRD §74).
  */
 

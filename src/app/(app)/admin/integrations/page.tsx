@@ -13,7 +13,7 @@ export default async function IntegrationsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const integrations = listIntegrations(user.organizationId);
+  const integrations = (await listIntegrations(user.organizationId));
 
   const rows = integrations.map((integration) => ({
     id: integration.id,

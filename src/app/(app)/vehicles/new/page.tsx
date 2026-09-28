@@ -10,9 +10,11 @@ export default async function NewVehiclePage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const stations = listAllStations(user.organizationId).filter((station) => !station.isArchived);
-  const fuelTypes = listFuelTypes(user.organizationId);
-  const vehicleCount = listAllVehicles(user.organizationId).length;
+  const stations = (await listAllStations(user.organizationId))
+    .filter((station) => user.stationIds.length === 0 || user.stationIds.includes(station.id))
+    .filter((station) => !station.isArchived);
+  const fuelTypes = (await listFuelTypes(user.organizationId));
+  const vehicleCount = (await listAllVehicles(user.organizationId)).length;
 
   return (
     <div className="space-y-5">

@@ -12,8 +12,10 @@ export default async function NewReportPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const stations = listAllStations(user.organizationId);
-  const fuelTypes = listFuelTypes(user.organizationId);
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const fuelTypes = (await listFuelTypes(user.organizationId));
   const now = new Date().toISOString();
 
   return (
@@ -31,7 +33,7 @@ export default async function NewReportPage() {
 
       <Notice tone="info" title="Consumption is measured, not sold">
         Outflow is labelled “Fuel Consumption / Tank Outflow” until dispenser integration exists. Numbers come from probe
-        readings, so they describe what left the tank — not what a pump rang up.
+        readings, so they describe what left the tank - not what a pump rang up.
       </Notice>
 
       <ReportForm

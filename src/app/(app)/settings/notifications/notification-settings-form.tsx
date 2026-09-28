@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils";
 const CHANNELS = [
   { value: "in_app", label: "In-app", description: "Notification centre and dashboard" },
   { value: "email", label: "Email", description: "Sent to the recipient list below" },
-  { value: "sms", label: "SMS", description: "Text message — reserved for critical alerts" },
+  { value: "sms", label: "SMS", description: "Text message - reserved for critical alerts" },
   { value: "push", label: "Push", description: "Browser push when installed as a PWA" },
 ];
 

@@ -11,7 +11,7 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 24);
-    const result = listStations({
+    const result = (await listStations({
       orgId: ctx.user.organizationId,
       search: params.get("search") ?? undefined,
       status: params.get("status") ?? undefined,
@@ -22,10 +22,11 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
       page,
       pageSize,
       includeArchived: params.get("archived") === "true",
-    });
-    const rows = result.rows.map((station) => {
+      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+    }));
+    const rows = await Promise.all(result.rows.map(async (station) => {
       try {
-        const detail = buildStationDetail(station.id, "today");
+        const detail = (await buildStationDetail(station.id, "today"));
         return {
           ...station,
           summary: detail
@@ -43,7 +44,7 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
       } catch {
         return { ...station, summary: null };
       }
-    });
+    }));
     return jsonOk({ rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -65,7 +66,7 @@ export const POST = withPermission("stations.create", async (request, ctx) => {
     }
   let station!: Station;
   try {
-      station = createStation({
+      station = (await createStation({
         organizationId: ctx.user.organizationId,
         name,
         code: code.toUpperCase(),
@@ -81,11 +82,11 @@ export const POST = withPermission("stations.create", async (request, ctx) => {
         openingTime: str(body.openingTime, "06:00"),
         closingTime: str(body.closingTime, "23:00"),
         notes: str(body.notes) || null,
-      });
+      }));
   } catch (error) {
     uniqueViolation(error, "A station with this code", "station code");
   }
-    audit({
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "station",
@@ -94,7 +95,7 @@ export const POST = withPermission("stations.create", async (request, ctx) => {
       summary: `${ctx.user.name} created station ${station.name}`,
       next: station,
       request,
-    });
+    }));
     return jsonCreated(station);
   } catch (error) {
     return jsonError(error as Error, request);

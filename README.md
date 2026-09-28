@@ -68,10 +68,11 @@ that data never crosses the organization boundary.
 ### Demo data vs live data
 
 The seeded database contains 30 days of internally consistent readings, derived movements,
-alerts, vehicles and audit history. With `DEMO_SIMULATOR=on` (the default in `.env`) the
-server also generates synthetic probe traffic on top of it, so every screen updates live.
+alerts, vehicles and audit history. The seed is static and deterministic. The simulator is no longer started from a web request or
+Next.js layout (that is unsafe on Vercel); invoke the simulator only from an explicit local/demo
+tool. Set `DEMO_SIMULATOR=off` in production.
 
-**Anything the simulator produces is labelled as simulated data.** Set `DEMO_SIMULATOR=off`
+**Anything the simulator produces is labelled as simulated data.** Keep `DEMO_SIMULATOR=off`
 and connect a real probe to switch to live hardware — nothing else changes.
 
 ### Scripts
@@ -83,8 +84,50 @@ and connect a real probe to switch to live hardware — nothing else changes.
 | `npm start` | Serve the production build |
 | `npm run typecheck` | TypeScript, no emit |
 | `npm run db:seed` | (Re)create the schema and seed demo data |
-| `npm run db:setup` | Create the schema only |
-| `npm run db:reset` | Drop and recreate the schema |
+| `npm run db:setup` | Create the local SQLite schema, or apply pending PostgreSQL migrations |
+| `npm run db:migrate` | Apply versioned `supabase/migrations/*.sql` to PostgreSQL |
+| `npm run db:seed:postgres` | Idempotently bootstrap one Supabase organization, admin, station and tank |
+| `npm run db:reset` | Drop and recreate the local SQLite schema (never resets PostgreSQL) |
+
+---
+
+## Vercel + Supabase deployment
+
+Production uses Supabase PostgreSQL; SQLite is only a local development adapter. The checked-in
+`supabase/migrations/0001_initial.sql` is the versioned schema baseline and the application never
+creates production tables during a request.
+
+1. Create a Supabase project and copy both its **direct** database URL (for migrations) and its
+   **shared transaction pooler** URL (port `6543`, for Vercel Functions).
+2. Apply the schema from a trusted migration environment:
+
+   ```bash
+   DB_PROVIDER=postgresql DATABASE_URL="<supabase-direct-url>" npm run db:migrate
+   ```
+
+3. Bootstrap the first tenant with secrets supplied through your shell or CI secret manager:
+
+   ```bash
+   DB_PROVIDER=postgresql DATABASE_URL="<supabase-direct-url>" \
+     SEED_ADMIN_EMAIL="admin@example.com" \
+     SEED_ADMIN_PASSWORD="use-a-unique-12-character-password" \
+     SEED_DEVICE_KEY="generate-a-device-key" \
+     npm run db:seed:postgres
+   ```
+
+4. Import the repository into Vercel and set `DB_PROVIDER=postgresql`, the **pooler**
+   `DATABASE_URL`, a long random `AUTH_SECRET`, the public `AUTH_URL`, and the SMTP variables
+   documented in [`.env.example`](./.env.example). Set `CRON_SECRET` as a Vercel secret, keep
+   `DEMO_SIMULATOR=off`, and do not expose Supabase service-role credentials to the browser.
+5. Deploy with the committed `vercel.json`. Its daily Cron invokes
+   `/api/cron/maintenance` to sweep stale devices across all active organizations. The runtime
+   PostgreSQL client uses a small pool,
+   disables prepared statements for transaction pooling, and requires TLS. Rate-limit buckets
+   are stored in PostgreSQL so limits work across Vercel instances.
+
+The realtime endpoint reads durable PostgreSQL snapshots and has a bounded 60-second Vercel
+lifetime; clients reconnect/poll rather than relying on an in-process event bus. Report exports
+are generated in memory and returned in the response, so no local filesystem survives a deploy.
 
 ---
 
@@ -101,7 +144,7 @@ Event engine (src/server/engine/fuel.ts)
    validate → classify movement → store event → evaluate rules
         │
         ├──► readings / fuel_events / alerts tables
-        ├──► realtime bus (SSE)  ──►  browser updates without refresh
+        ├──► durable PostgreSQL snapshot stream (bounded SSE / polling)
         └──► audit log
         ▼
 Web app (Next.js App Router, server components by default)
@@ -139,8 +182,11 @@ src/
     realtime/bus.ts         SSE fan-out
     services/               analytics read models, report builder
   lib/                      formatters, status vocabulary, CSV/Excel export
-db/schema.sql               executable SQLite DDL (21 tables)
-scripts/seed.mjs            demo data generator
+db/schema.sql               canonical PostgreSQL schema source
+db/schema.sqlite.sql        local SQLite development schema
+supabase/migrations/        versioned PostgreSQL migrations
+scripts/seed.mjs            local demo data generator
+scripts/seed-postgres.mjs   minimal production bootstrap seed
 ```
 
 ### API
@@ -266,11 +312,11 @@ Same endpoint, different provider key. Positions land on the network map and on 
 record; a tracker that stops reporting raises a `gps_offline` alert after the configured
 timeout.
 
-### 3. Email and SMS
+### 3. Email and in-app notifications
 
-Set `SMTP_*` / `SMS_PROVIDER_KEY` in the environment. Without them the platform records the
-delivery failure instead of pretending the notification was sent. See
-[`.env.example`](./.env.example).
+Password-reset links are delivered through the configured `SMTP_*` transport and are never
+returned by the API. In-app alert notifications are durable PostgreSQL rows and are surfaced by
+polling, so they work across serverless instances. See [`.env.example`](./.env.example).
 
 ---
 
@@ -287,11 +333,11 @@ values.
 | `AUTH_SECRET` | signs session JWTs — must be long and random |
 | `AUTH_URL` | public origin, used in password-reset links |
 | `SESSION_MAX_AGE_SECONDS` | session lifetime |
-| `DEVICE_INGEST_KEY` | legacy shared secret; per-device `x-api-key` is the primary mechanism |
+| Device credentials | per-device API keys are hashed at rest; HMAC providers also require the provider signature |
 | `REALTIME_TRANSPORT` | `sse` (default) or `polling` |
 | `DEMO_SIMULATOR` | `on` generates synthetic traffic, `off` is live-only |
 | `RATE_LIMIT_MAX` · `RATE_LIMIT_WINDOW_SECONDS` | per-client rate limiting |
-| `SMTP_*` · `SMS_PROVIDER_KEY` | notification channels |
+| `SMTP_*` | password-reset email delivery |
 
 Units, currency, language and timezone are per-organization settings. Readings are always
 stored in litres and Celsius at capture time; changing a display setting never rewrites
@@ -324,9 +370,7 @@ history.
 
 ## Notes on the demo environment
 
-The sandbox this was built in has no network access to font CDNs, map tile providers or
-Prisma engine downloads. Accordingly the application uses a system font stack, `lucide-react`
-icons from npm, a hand-built SVG network map (no tiles, no API key), and `node:sqlite` for the
-runtime database. The data-access layer is isolated behind the repositories in
-`src/server/db/repo/`, so pointing `DATABASE_URL` at PostgreSQL is a repository change, not an
-application change.
+The application uses a system font stack, `lucide-react` icons, a hand-built SVG network map
+(no tiles or map API key), and `node:sqlite` only for local development. Production uses the
+async `postgres` adapter against Supabase through the repository boundary in
+`src/server/db/repo/`.

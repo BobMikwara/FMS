@@ -4,7 +4,7 @@ import { clientIp, jsonError, jsonOk, parseJsonBody, rateLimit, unauthorized, un
 export async function POST(request: Request) {
   try {
     const ip = clientIp(request) ?? "unknown";
-    rateLimit(`login:${ip}`, 12, 300);
+    await rateLimit(`login:${ip}`, 12, 300);
     const body = await parseJsonBody<{ email?: string; password?: string; remember?: boolean }>(request);
     if (!body.email || !body.password) {
       return jsonError(unprocessable("Email and password are required."));

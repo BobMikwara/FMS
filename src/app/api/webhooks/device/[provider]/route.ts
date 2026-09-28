@@ -2,7 +2,7 @@ import { ingestReading } from "@/server/engine/fuel";
 import { hashDeviceKey, verifyDeviceKey } from "@/server/auth/session";
 import { getProvider } from "@/server/integrations/providers";
 import { getDeviceByApiKeyHash } from "@/server/db/repo/devices";
-import { forbidden, jsonError, jsonOk, notFound, unauthorized, unprocessable } from "@/server/api/route";
+import { conflict, forbidden, jsonError, jsonOk, notFound, unauthorized, unprocessable } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
 
@@ -31,14 +31,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     const rawBody = await request.text();
 
     // 1. Device authentication.
-    const apiKey = request.headers.get("x-api-key") ?? request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ?? "";
+    const apiKey =
+      request.headers.get("x-api-key") ??
+      request.headers.get("x-device-key") ??
+      request.headers.get("authorization")?.replace(/^Bearer\s+/i, "") ??
+      "";
     if (!apiKey) {
       return jsonError(unauthorized("A device API key is required (x-api-key header)."));
     }
     const hashed = hashDeviceKey(apiKey);
-    const device = getDeviceByApiKeyHash(hashed);
+    const device = (await getDeviceByApiKeyHash(hashed));
     if (!device || !verifyDeviceKey(apiKey, device.apiKeyHash)) {
       return jsonError(unauthorized("Device credentials were rejected."));
+    }
+    if (device.provider !== provider) {
+      return jsonError(unauthorized("The device is registered with a different provider adapter."));
+    }
+    if (providerAdapter.authMethod === "hmac" && !providerAdapter.verify(request, rawBody, apiKey)) {
+      return jsonError(unauthorized("The provider signature was missing or invalid."));
     }
     if (!device.isActive) {
       return jsonError(forbidden("This device has been deactivated and can no longer submit readings."));
@@ -71,13 +81,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     }
 
     // 3. Validate, classify and store.
-    const result = ingestReading({ deviceSerial: device.serialNumber, reading: normalized });
+    const result = (await ingestReading({ deviceSerial: device.serialNumber, reading: normalized }));
     if (!result.ok) {
       // A rejected reading is a 422 (or 409 when the device is misconfigured),
       // never a 500 — the device did its job, the payload was the problem.
       const status =
         result.rejected === "unknown_device" || result.rejected === "unassigned_device" ? 409 : 422;
-      return jsonError(unprocessable(result.message ?? "The reading was rejected."));
+      return jsonError(
+        status === 409
+          ? conflict(result.message ?? "The device is not configured for ingestion.")
+          : unprocessable(result.message ?? "The reading was rejected."),
+      );
     }
     return jsonOk(result);
   } catch (error) {

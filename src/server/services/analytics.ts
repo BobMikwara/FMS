@@ -21,7 +21,7 @@ import {
   movementTotals,
 } from "../db/repo/events";
 import { latestReadingForTank } from "../db/repo/readings";
-import { reconcileTank, stockCoverage, sweepDeviceHealth } from "../engine/fuel";
+import { reconcileTank, stockCoverage } from "../engine/fuel";
 import type { Alert, Device, Station, Tank } from "../domain/types";
 
 /**
@@ -151,37 +151,43 @@ export interface MovementRow {
   fuelColor: string;
 }
 
-export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "90d" = "7d"): DashboardData {
-  // Keep device health accurate before computing anything.
-  try {
-    sweepDeviceHealth(orgId);
-  } catch (error) {
-    console.error("[dashboard] device sweep failed", error);
-  }
-
+export async function buildDashboard(
+  orgId: string,
+  period: "today" | "7d" | "30d" | "90d" = "7d",
+  stationIds?: string[],
+): Promise<DashboardData> {
   const range = rangeFor(period);
   const today = rangeFor("today");
-  const organization = getOrganization(orgId);
-  const stations = listAllStations(orgId);
-  const tanks = listAllTanks(orgId);
-  const fuelTypes = listFuelTypes(orgId);
-  const devices = listAllDevices(orgId);
-  const vehicles = listAllVehicles(orgId);
+  const organization = (await getOrganization(orgId));
+  const scopedStationIds = stationIds && stationIds.length > 0 ? stationIds : undefined;
+  const allStations = await listAllStations(orgId);
+  const stations = scopedStationIds ? allStations.filter((station) => scopedStationIds.includes(station.id)) : allStations;
+  const allTanks = await listAllTanks(orgId);
+  const tanks = scopedStationIds ? allTanks.filter((tank) => scopedStationIds.includes(tank.stationId)) : allTanks;
+  const fuelTypes = (await listFuelTypes(orgId));
+  const allDevices = await listAllDevices(orgId);
+  const tankIds = new Set(tanks.map((tank) => tank.id));
+  const devices = scopedStationIds
+    ? allDevices.filter((device) => (device.stationId ? scopedStationIds.includes(device.stationId) : device.tankId ? tankIds.has(device.tankId) : false))
+    : allDevices;
+  const allVehicles = await listAllVehicles(orgId);
+  const vehicles = scopedStationIds ? allVehicles.filter((vehicle) => vehicle.stationId && scopedStationIds.includes(vehicle.stationId)) : allVehicles;
 
   const fuelTypeById = new Map(fuelTypes.map((f) => [f.id, f]));
   const stationById = new Map(stations.map((s) => [s.id, s]));
 
-  const alertsToday = listAlerts({
+  const alertsToday = (await listAlerts({
     orgId,
     status: "active",
     from: dayStart(0),
     to: new Date().toISOString(),
     pageSize: 200,
-  });
+    stationIds: scopedStationIds,
+  }));
 
-  const activeAlerts = listAlerts({ orgId, status: "active", pageSize: 200 });
-  const todayTotals = movementTotals(orgId, today.from, today.to);
-  const rangeTotals = movementTotals(orgId, range.from, range.to);
+  const activeAlerts = (await listAlerts({ orgId, status: "active", pageSize: 200, stationIds: scopedStationIds }));
+  const todayTotals = (await movementTotals(orgId, today.from, today.to, undefined, undefined, scopedStationIds));
+  const rangeTotals = (await movementTotals(orgId, range.from, range.to, undefined, undefined, scopedStationIds));
 
   const probes = devices.filter((d) => d.type === "fuel_probe");
   // The two buckets are complementary and use exactly the predicate behind
@@ -191,7 +197,7 @@ export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "
   const offlineDevices = probes.filter((d) => NOT_REPORTING.has(d.status)).length;
 
   /* ---- station summaries ---- */
-  const stationsSummary: StationSummary[] = stations.map((station) => {
+  const stationsSummary: StationSummary[] = await Promise.all(stations.map(async (station) => {
     const stationTanks = tanks.filter((t) => t.stationId === station.id);
     const totalFuel = stationTanks.reduce((sum, t) => sum + t.currentVolume, 0);
     const capacity = stationTanks.reduce((sum, t) => sum + t.capacity, 0);
@@ -202,8 +208,8 @@ export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "
           stationTanks.length
         : 0;
     const stationDevices = probes.filter((d) => d.stationId === station.id);
-    const stationAlerts = listAlerts({ orgId, stationId: station.id, status: "active", pageSize: 200 }).total;
-    const stToday = movementTotals(orgId, today.from, today.to, station.id);
+    const stationAlerts = (await listAlerts({ orgId, stationId: station.id, status: "active", pageSize: 200 })).total;
+    const stToday = (await movementTotals(orgId, today.from, today.to, station.id));
     const worst =
       stationTanks.some((t) => t.status === "offline") || stationDevices.every((d) => d.status !== "online" && stationDevices.length > 0)
         ? "offline"
@@ -228,12 +234,12 @@ export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "
       todayRefills: stToday.refills,
       status: worst,
     };
-  });
+  }));
 
   /* ---- charts ---- */
   const granularity: "hour" | "day" = period === "today" ? "hour" : "day";
-  const levelTrend = levelSeries(orgId, range.from, range.to, granularity);
-  const movements = movementSeries(orgId, range.from, range.to, granularity);
+  const levelTrend = (await levelSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds));
+  const movements = (await movementSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds));
   const consumptionTrend = movements.map((m) => ({
     bucket: m.bucket,
     consumption: m.consumption,
@@ -274,32 +280,35 @@ export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "
     .sort((a, b) => a.percent - b.percent)
     .slice(0, 12);
 
-  const lossSeries = query<{ bucket: string; loss: number }>(
+  const stationScopeSql = scopedStationIds ? ` AND station_id IN (${scopedStationIds.map(() => "?").join(", ")})` : "";
+  const stationScopeParams = scopedStationIds ?? [];
+  const lossSeries = (await query<{ bucket: string; loss: number }>(
     `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', ts) AS bucket,
             COALESCE(SUM(CASE WHEN type = 'anomaly' THEN volume ELSE 0 END), 0) AS loss
-     FROM fuel_events WHERE organization_id = ? AND ts >= ? AND ts <= ?
+     FROM fuel_events WHERE organization_id = ? AND ts >= ? AND ts <= ?${stationScopeSql}
      GROUP BY bucket ORDER BY bucket ASC`,
-    [orgId, range.from, range.to],
-  );
+    [orgId, range.from, range.to, ...stationScopeParams],
+  ));
 
-  const alertFrequency = query<{ bucket: string; critical: number; warning: number; info: number }>(
+  const alertFrequency = (await query<{ bucket: string; critical: number; warning: number; info: number }>(
     `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', created_at) AS bucket,
             COALESCE(SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END), 0) AS critical,
             COALESCE(SUM(CASE WHEN severity = 'warning' THEN 1 ELSE 0 END), 0) AS warning,
             COALESCE(SUM(CASE WHEN severity = 'info' THEN 1 ELSE 0 END), 0) AS info
-     FROM alerts WHERE organization_id = ? AND created_at >= ? AND created_at <= ?
+     FROM alerts WHERE organization_id = ? AND created_at >= ? AND created_at <= ?${stationScopeSql}
      GROUP BY bucket ORDER BY bucket ASC`,
-    [orgId, range.from, range.to],
-  );
+    [orgId, range.from, range.to, ...stationScopeParams],
+  ));
 
   /* ---- recent movements ---- */
-  const movementsPage = listEvents({
+  const movementsPage = (await listEvents({
     orgId,
     from: range.from,
     to: range.to,
     page: 1,
     pageSize: 12,
-  });
+    stationIds: scopedStationIds,
+  }));
   const deviceById = new Map(devices.map((d) => [d.id, d]));
   const tankById = new Map(tanks.map((t) => [t.id, t]));
   const recentMovements: MovementRow[] = movementsPage.rows.map((ev) => {
@@ -389,9 +398,9 @@ export function buildDashboard(orgId: string, period: "today" | "7d" | "30d" | "
 export interface TankDetail {
   tank: Tank;
   station: Station | null;
-  fuelType: ReturnType<typeof getFuelType>;
+  fuelType: Awaited<ReturnType<typeof getFuelType>>;
   device: Device | null;
-  latestReading: ReturnType<typeof latestReadingForTank>;
+  latestReading: Awaited<ReturnType<typeof latestReadingForTank>>;
   fillPercent: number;
   remainingCapacity: number;
   status: Tank["status"];
@@ -400,21 +409,21 @@ export interface TankDetail {
   todayConsumption: number;
   todayRefills: number;
   coverage: { avgDailyConsumption: number; daysRemaining: number | null };
-  reconciliation: ReturnType<typeof reconcileTank>;
+  reconciliation: Awaited<ReturnType<typeof reconcileTank>>;
   events: MovementRow[];
   alerts: Alert[];
   history: { bucket: string; avgVolume: number; avgPercent: number; avgTemp: number; avgWater: number }[];
   readings: { id: string; ts: string; volumeLiters: number; levelPercent: number | null; temperatureC: number | null; waterLevelMm: number | null; signal: number | null; batteryPct: number | null; deviceSerial: string | null }[];
 }
 
-export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "90d" = "7d"): TankDetail | null {
-  const tank = getTank(tankId);
+export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "90d" = "7d"): Promise<TankDetail | null> {
+  const tank = (await getTank(tankId));
   if (!tank) return null;
-  const station = getStation(tank.stationId);
-  const fuelType = getFuelType(tank.fuelTypeId);
-  const devices = listAllDevices(tank.organizationId);
+  const station = (await getStation(tank.stationId));
+  const fuelType = (await getFuelType(tank.fuelTypeId));
+  const devices = (await listAllDevices(tank.organizationId));
   const device = devices.find((d) => d.tankId === tank.id && d.type === "fuel_probe") ?? null;
-  const latestReading = latestReadingForTank(tank.id);
+  const latestReading = (await latestReadingForTank(tank.id));
 
   const fillPercent = tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0;
   const remainingCapacity = Math.max(0, tank.capacity - tank.currentVolume);
@@ -432,10 +441,10 @@ export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "
 
   const today = rangeFor("today");
   const range = rangeFor(period === "24h" ? "today" : (period.toLowerCase() as "7d" | "30d" | "90d"));
-  const totals = movementTotals(tank.organizationId, range.from, range.to, undefined, tank.id);
+  const totals = (await movementTotals(tank.organizationId, range.from, range.to, undefined, tank.id));
   const granularity: "hour" | "day" = period === "24h" ? "hour" : "day";
 
-  const history = query<{ bucket: string; avgVolume: number; avgPercent: number; avgTemp: number; avgWater: number }>(
+  const history = (await query<{ bucket: string; avgVolume: number; avgPercent: number; avgTemp: number; avgWater: number }>(
     `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', ts) AS bucket,
             AVG(volume_liters) AS avgVolume,
             AVG(level_percent) AS avgPercent,
@@ -444,9 +453,9 @@ export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "
      FROM readings WHERE tank_id = ? AND ts >= ? AND ts <= ?
      GROUP BY bucket ORDER BY bucket ASC`,
     [tank.id, range.from, range.to],
-  );
+  ));
 
-  const eventsPage = listEvents({ orgId: tank.organizationId, tankId: tank.id, page: 1, pageSize: 40 });
+  const eventsPage = (await listEvents({ orgId: tank.organizationId, tankId: tank.id, page: 1, pageSize: 40 }));
   const events: MovementRow[] = eventsPage.rows.map((ev) => ({
     id: ev.id,
     ts: ev.ts,
@@ -467,13 +476,13 @@ export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "
     fuelColor: fuelType?.color ?? "#64748b",
   }));
 
-  const alerts = listAlerts({ orgId: tank.organizationId, tankId: tank.id, pageSize: 50 }).rows;
+  const alerts = (await listAlerts({ orgId: tank.organizationId, tankId: tank.id, pageSize: 50 })).rows;
 
-  const recentReadings = query<Record<string, unknown>>(
+  const recentReadings = (await query<Record<string, unknown>>(
     `SELECT r.*, d.serial_number AS device_serial FROM readings r JOIN devices d ON d.id = r.device_id
      WHERE r.tank_id = ? ORDER BY r.ts DESC LIMIT 40`,
     [tank.id],
-  ).map((row) => ({
+  )).map((row) => ({
     id: String(row.id),
     ts: String(row.ts),
     volumeLiters: Number(row.volume_liters),
@@ -498,8 +507,8 @@ export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "
     lastUpdateAgeMinutes: Number.isFinite(lastUpdateAgeMinutes) ? lastUpdateAgeMinutes : 9999,
     todayConsumption: Math.round(totals.consumption),
     todayRefills: Math.round(totals.refills),
-    coverage: stockCoverage(tank.id),
-    reconciliation: reconcileTank(tank.id, range.from, range.to),
+    coverage: (await stockCoverage(tank.id)),
+    reconciliation: (await reconcileTank(tank.id, range.from, range.to)),
     events,
     alerts,
     history,
@@ -511,20 +520,20 @@ export function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "
 /* Station detail read model                                                   */
 /* -------------------------------------------------------------------------- */
 
-export function buildStationDetail(stationId: string, period: "today" | "7d" | "30d" = "7d") {
-  const station = getStation(stationId);
+export async function buildStationDetail(stationId: string, period: "today" | "7d" | "30d" = "7d") {
+  const station = (await getStation(stationId));
   if (!station) return null;
-  const tanks = listAllTanks(station.organizationId).filter((t) => t.stationId === station.id);
-  const fuelTypes = listFuelTypes(station.organizationId);
-  const devices = listAllDevices(station.organizationId).filter((d) => d.stationId === station.id);
+  const tanks = (await listAllTanks(station.organizationId)).filter((t) => t.stationId === station.id);
+  const fuelTypes = (await listFuelTypes(station.organizationId));
+  const devices = (await listAllDevices(station.organizationId)).filter((d) => d.stationId === station.id);
   const range = rangeFor(period);
   const today = rangeFor("today");
-  const totals = movementTotals(station.organizationId, range.from, range.to, station.id);
-  const todayTotals = movementTotals(station.organizationId, today.from, today.to, station.id);
-  const alerts = listAlerts({ orgId: station.organizationId, stationId: station.id, pageSize: 100 });
+  const totals = (await movementTotals(station.organizationId, range.from, range.to, station.id));
+  const todayTotals = (await movementTotals(station.organizationId, today.from, today.to, station.id));
+  const alerts = (await listAlerts({ orgId: station.organizationId, stationId: station.id, pageSize: 100 }));
   const totalFuel = tanks.reduce((s, t) => s + t.currentVolume, 0);
   const capacity = tanks.reduce((s, t) => s + t.capacity, 0);
-  const movements = listEvents({ orgId: station.organizationId, stationId: station.id, page: 1, pageSize: 12 });
+  const movements = (await listEvents({ orgId: station.organizationId, stationId: station.id, page: 1, pageSize: 12 }));
 
   return {
     station,
@@ -542,8 +551,8 @@ export function buildStationDetail(stationId: string, period: "today" | "7d" | "
     rangeRefills: Math.round(totals.refills),
     rangeSuspectedLoss: Math.round(totals.suspectedLoss),
     movements: movements.rows,
-    levelTrend: levelSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id),
-    movementTrend: movementSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id),
+    levelTrend: (await levelSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id)),
+    movementTrend: (await movementSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id)),
   };
 }
 
@@ -561,16 +570,18 @@ export interface SearchHit {
   score: number;
 }
 
-export function globalSearch(orgId: string, term: string, limit = 12): SearchHit[] {
+export async function globalSearch(orgId: string, term: string, limit = 12, stationIds?: string[]): Promise<SearchHit[]> {
   const q = term.trim().toLowerCase();
   if (q.length < 1) return [];
   const like = `%${q}%`;
+  const scopedStationIds = stationIds && stationIds.length > 0 ? stationIds : undefined;
+  const stationPlaceholders = scopedStationIds?.map(() => "?").join(", ");
   const hits: SearchHit[] = [];
 
-  const stations = query<Record<string, unknown>>(
-    `SELECT id, name, code, city, status FROM stations WHERE organization_id = ? AND (name LIKE ? OR code LIKE ? OR city LIKE ?) LIMIT 6`,
-    [orgId, like, like, like],
-  );
+  const stations = (await query<Record<string, unknown>>(
+    `SELECT id, name, code, city, status FROM stations WHERE organization_id = ?${scopedStationIds ? ` AND id IN (${stationPlaceholders})` : ""} AND (name LIKE ? OR code LIKE ? OR city LIKE ?) LIMIT 6`,
+    scopedStationIds ? [orgId, ...scopedStationIds, like, like, like] : [orgId, like, like, like],
+  ));
   for (const s of stations) {
     hits.push({
       id: String(s.id),
@@ -583,12 +594,12 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const tanks = query<Record<string, unknown>>(
+  const tanks = (await query<Record<string, unknown>>(
     `SELECT t.id, t.name, t.capacity, t.current_volume, s.name AS station_name, ft.system_name AS fuel
      FROM tanks t JOIN stations s ON s.id = t.station_id JOIN fuel_types ft ON ft.id = t.fuel_type_id
-     WHERE t.organization_id = ? AND (t.name LIKE ? OR t.code LIKE ? OR s.name LIKE ?) LIMIT 6`,
-    [orgId, like, like, like],
-  );
+     WHERE t.organization_id = ?${scopedStationIds ? ` AND t.station_id IN (${stationPlaceholders})` : ""} AND (t.name LIKE ? OR t.code LIKE ? OR s.name LIKE ?) LIMIT 6`,
+    scopedStationIds ? [orgId, ...scopedStationIds, like, like, like] : [orgId, like, like, like],
+  ));
   for (const t of tanks) {
     const pct = Number(t.capacity) > 0 ? (Number(t.current_volume) / Number(t.capacity)) * 100 : 0;
     hits.push({
@@ -602,11 +613,11 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const devices = query<Record<string, unknown>>(
+  const devices = (await query<Record<string, unknown>>(
     `SELECT id, serial_number, type, status, label FROM devices
-     WHERE organization_id = ? AND (serial_number LIKE ? OR label LIKE ?) LIMIT 6`,
-    [orgId, like, like],
-  );
+     WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (serial_number LIKE ? OR label LIKE ?) LIMIT 6`,
+    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
+  ));
   for (const d of devices) {
     hits.push({
       id: String(d.id),
@@ -619,10 +630,10 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const vehicles = query<Record<string, unknown>>(
-    `SELECT id, name, plate_number, status FROM vehicles WHERE organization_id = ? AND (name LIKE ? OR plate_number LIKE ?) LIMIT 4`,
-    [orgId, like, like],
-  );
+  const vehicles = (await query<Record<string, unknown>>(
+    `SELECT id, name, plate_number, status FROM vehicles WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (name LIKE ? OR plate_number LIKE ?) LIMIT 4`,
+    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
+  ));
   for (const v of vehicles) {
     hits.push({
       id: String(v.id),
@@ -635,10 +646,10 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const alerts = query<Record<string, unknown>>(
-    `SELECT id, title, severity, status, type FROM alerts WHERE organization_id = ? AND (title LIKE ? OR message LIKE ?) LIMIT 4`,
-    [orgId, like, like],
-  );
+  const alerts = (await query<Record<string, unknown>>(
+    `SELECT id, title, severity, status, type FROM alerts WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (title LIKE ? OR message LIKE ?) LIMIT 4`,
+    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
+  ));
   for (const a of alerts) {
     hits.push({
       id: String(a.id),
@@ -651,10 +662,10 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const users = query<Record<string, unknown>>(
+  const users = (await query<Record<string, unknown>>(
     `SELECT id, name, email, job_title FROM users WHERE organization_id = ? AND (name LIKE ? OR email LIKE ?) LIMIT 4`,
     [orgId, like, like],
-  );
+  ));
   for (const u of users) {
     hits.push({
       id: String(u.id),
@@ -667,10 +678,10 @@ export function globalSearch(orgId: string, term: string, limit = 12): SearchHit
     });
   }
 
-  const reports = query<Record<string, unknown>>(
+  const reports = (await query<Record<string, unknown>>(
     `SELECT id, title, category, period FROM reports WHERE organization_id = ? AND title LIKE ? LIMIT 4`,
     [orgId, like],
-  );
+  ));
   for (const r of reports) {
     hits.push({
       id: String(r.id),

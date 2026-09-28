@@ -1,4 +1,4 @@
-import { createTank, listFuelTypes, listTanks } from "@/server/db/repo/stations";
+import { createTank, getStation, listFuelTypes, listTanks } from "@/server/db/repo/stations";
 import {
   ApiError,
   audit,
@@ -20,7 +20,7 @@ export const GET = withPermission("tanks.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const { page, pageSize } = parsePagination(params, 24);
-    const result = listTanks({
+    const result = (await listTanks({
       orgId: ctx.user.organizationId,
       stationId: params.get("stationId") ?? undefined,
       fuelTypeId: params.get("fuelTypeId") ?? undefined,
@@ -33,7 +33,7 @@ export const GET = withPermission("tanks.view", async (request, ctx) => {
       pageSize,
       includeArchived: params.get("archived") === "true",
       stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
-    });
+    }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -53,12 +53,23 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
     if (capacity > 5_000_000) {
       throw new ApiError(422, "Tank capacity looks implausibly large. Please check the value.", "validation_error");
     }
-    const fuelTypes = listFuelTypes(ctx.user.organizationId);
-    const fuelTypeId = str(body.fuelTypeId) || fuelTypes[0]?.id;
+    const station = await getStation(stationId);
+    if (!station || station.organizationId !== ctx.user.organizationId) {
+      throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
+    }
+    if (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(stationId)) {
+      throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
+    }
+    const fuelTypes = (await listFuelTypes(ctx.user.organizationId));
+    const requestedFuelTypeId = str(body.fuelTypeId);
+    if (requestedFuelTypeId && !fuelTypes.some((fuelType) => fuelType.id === requestedFuelTypeId)) {
+      throw new ApiError(422, "The selected fuel type does not exist in your organization.", "validation_error");
+    }
+    const fuelTypeId = requestedFuelTypeId || fuelTypes[0]?.id;
     if (!fuelTypeId) {
       throw new ApiError(422, "Create at least one fuel type before adding tanks.", "validation_error");
     }
-    const tank = createTank({
+    const tank = (await createTank({
       organizationId: ctx.user.organizationId,
       stationId,
       fuelTypeId,
@@ -73,8 +84,8 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
       criticalThresholdPct: num(body.criticalThresholdPct, 10),
       overfillThresholdPct: num(body.overfillThresholdPct, 95),
       notes: str(body.notes) || null,
-    });
-    audit({
+    }));
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "tank",
@@ -83,7 +94,7 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
       summary: `${ctx.user.name} created ${tank.name} (${Math.round(tank.capacity).toLocaleString()} L)`,
       next: tank,
       request,
-    });
+    }));
     return jsonCreated(tank);
   } catch (error) {
     return jsonError(error as Error, request);

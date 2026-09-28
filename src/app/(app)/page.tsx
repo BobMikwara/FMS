@@ -16,7 +16,7 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const data = buildDashboard(user.organizationId, "7d");
+  const data = (await buildDashboard(user.organizationId, "7d", user.stationIds));
   const { kpis, charts, alerts, recentMovements, lowTanks, deviceHealth, stations } = data;
 
   const greeting = greetingForHour(new Date().getHours());
@@ -29,7 +29,7 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <PageHeader
         title={`${greeting}, ${firstName}`}
-        description={`${data.orgName} · live fuel inventory across ${kpis.totalStations} stations and ${kpis.totalTanks} tanks. Values below come directly from device readings — nothing here is estimated.`}
+        description={`${data.orgName} · live fuel inventory across ${kpis.totalStations} stations and ${kpis.totalTanks} tanks. Values below come directly from device readings - nothing here is estimated.`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <LiveIndicator state="live" ageLabel={timeAgo(data.generatedAt)} />
@@ -123,7 +123,7 @@ export default async function DashboardPage() {
           unit="L"
           icon={<Icon name="gauge" className="h-3.5 w-3.5" />}
           tone={kpis.suspectedLoss > 0 ? "warn" : "neutral"}
-          hint={`Anomalous outflow over the selected ${rangeLabel} — flagged for investigation, never auto-classified as theft.`}
+          hint={`Anomalous outflow over the selected ${rangeLabel} - flagged for investigation, never auto-classified as theft.`}
         />
       </section>
 

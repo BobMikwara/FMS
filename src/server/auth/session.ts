@@ -128,8 +128,8 @@ export async function readSessionCookie(): Promise<SessionPayload | null> {
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const payload = await readSessionCookie();
   if (!payload) return null;
-  const user = getUser(payload.sub);
-  const organization = getOrganization(payload.orgId);
+  const user = (await getUser(payload.sub));
+  const organization = (await getOrganization(payload.orgId));
   if (!user || user.status !== "active") return null;
   if (!organization) return null;
   return {
@@ -161,7 +161,7 @@ const LOCK_MINUTES = 15;
 
 export async function authenticate(email: string, password: string, ip?: string): Promise<LoginResult> {
   const normalized = email.trim().toLowerCase();
-  const record = getUserByEmail(normalized);
+  const record = (await getUserByEmail(normalized));
   if (!record) {
     // Constant-ish work to avoid user enumeration timing.
     await bcrypt.compare(password, "$2a$12$invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalidinv");
@@ -181,21 +181,21 @@ export async function authenticate(email: string, password: string, ip?: string)
   if (!valid) {
     const attempts = (record.failedAttempts ?? 0) + 1;
     const shouldLock = attempts >= MAX_FAILED_ATTEMPTS;
-    updateUser(record.id, {
+    (await updateUser(record.id, {
       failedAttempts: attempts,
       lockedUntil: shouldLock ? new Date(Date.now() + LOCK_MINUTES * 60_000).toISOString() : undefined,
-    });
+    }));
     return { ok: false, error: "Incorrect email or password." };
   }
 
-    updateUser(record.id, {
+    (await updateUser(record.id, {
       failedAttempts: 0,
       lockedUntil: null,
       lastLoginAt: new Date().toISOString(),
       lastLoginIp: ip ?? undefined,
-    });
+    }));
 
-  const organization = getOrganization(record.organizationId);
+  const organization = (await getOrganization(record.organizationId));
   const user: SessionUser = {
     id: record.id,
     email: record.email,
@@ -215,23 +215,23 @@ export async function authenticate(email: string, password: string, ip?: string)
 /* Password reset                                                             */
 /* -------------------------------------------------------------------------- */
 
-export async function requestPasswordReset(email: string): Promise<{ token: string } | null> {
-  const record = getUserByEmail(email.trim().toLowerCase());
+export async function requestPasswordReset(email: string): Promise<{ token: string; user: Pick<User, "email" | "name"> } | null> {
+  const record = (await getUserByEmail(email.trim().toLowerCase()));
   if (!record) return null;
   const token = randomBytes(32).toString("base64url");
   const tokenHash = createHash("sha256").update(token).digest("hex");
-  createResetToken(record.id, tokenHash, new Date(Date.now() + 60 * 60 * 1000).toISOString());
-  return { token };
+  (await createResetToken(record.id, tokenHash, new Date(Date.now() + 60 * 60 * 1000).toISOString()));
+  return { token, user: { email: record.email, name: record.name } };
 }
 
 export async function completePasswordReset(token: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
   const tokenHash = createHash("sha256").update(token).digest("hex");
-  const userId = consumeResetToken(tokenHash);
+  const userId = (await consumeResetToken(tokenHash));
   if (!userId) return { ok: false, error: "This reset link is invalid or has expired." };
-  const user = getUser(userId);
+  const user = (await getUser(userId));
   if (!user) return { ok: false, error: "This reset link is invalid or has expired." };
   const passwordHash = await hashPassword(newPassword);
-  updateUser(userId, { passwordHash, failedAttempts: 0, lockedUntil: null });
+  (await updateUser(userId, { passwordHash, failedAttempts: 0, lockedUntil: null }));
   return { ok: true };
 }
 

@@ -23,7 +23,7 @@ export const GET = withPermission("users.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const search = params.get("search") ?? undefined;
-    let rows = listUsers(ctx.user.organizationId);
+    let rows = (await listUsers(ctx.user.organizationId));
     if (search) {
       const term = search.toLowerCase();
       rows = rows.filter((user) => `${user.name} ${user.email} ${user.roleName}`.toLowerCase().includes(term));
@@ -51,7 +51,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
       throw new ApiError(422, "A temporary password of at least 10 characters is required.", "validation_error");
     }
 
-    const roles = listRoles();
+    const roles = (await listRoles());
     const role = roles.find((row) => row.id === roleId);
     if (!role) throw new ApiError(422, "Select a valid role.", "validation_error");
     // Never allow a non-owner to mint a more powerful account.
@@ -59,7 +59,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
       throw new ApiError(403, "Only an owner can create another owner account.", "forbidden");
     }
 
-    const stations = listAllStations(ctx.user.organizationId);
+    const stations = (await listAllStations(ctx.user.organizationId));
     const requestedStations = Array.isArray(body.stationIds) ? (body.stationIds as string[]) : [];
     const stationIds = requestedStations.filter((id) => stations.some((station) => station.id === id));
     if (role.key === "manager" || role.key === "operator") {
@@ -70,7 +70,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
 
   let user!: User;
   try {
-      user = createUser({
+      user = (await createUser({
         organizationId: ctx.user.organizationId,
         email,
         name,
@@ -80,13 +80,13 @@ export const POST = withPermission("users.create", async (request, ctx) => {
         jobTitle: str(body.jobTitle) || null,
         status: "invited",
         mfaEnabled: body.mfaEnabled === true,
-      });
+      }));
   } catch (error) {
     uniqueViolation(error, "An account with this email address", "email address");
   }
-    setUserStations(user.id, stationIds);
+    (await setUserStations(user.id, stationIds));
 
-    audit({
+    (await audit({
       user: ctx.user,
       action: "created",
       entity: "user",
@@ -95,7 +95,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
       summary: `${ctx.user.name} invited ${user.email} as ${role.name}`,
       next: { ...user, stationIds },
       request,
-    });
+    }));
     return jsonCreated({ ...user, stationIds });
   } catch (error) {
     return jsonError(error as Error, request);

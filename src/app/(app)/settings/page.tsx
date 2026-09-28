@@ -20,7 +20,7 @@ const SECTIONS = [
     href: "/settings/fuel-types",
     icon: Fuel,
     title: "Fuel types",
-    description: "The products you store — display name, colour and density used for volume conversion.",
+    description: "The products you store - display name, colour and density used for volume conversion.",
   },
   {
     href: "/settings/notifications",
@@ -40,8 +40,8 @@ export default async function SettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const organization = getOrganization(user.organizationId);
-  const stationCount = listAllStations(user.organizationId).length;
+  const organization = (await getOrganization(user.organizationId));
+  const stationCount = (await listAllStations(user.organizationId)).length;
 
   return (
     <div className="space-y-5">

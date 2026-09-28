@@ -6,7 +6,7 @@ export const dynamic = "force-dynamic";
 
 export default async function NewStationPage() {
   const user = await getCurrentUser();
-  const organization = user ? getOrganization(user.organizationId) : null;
+  const organization = user ? (await getOrganization(user.organizationId)) : null;
   return (
     <StationForm
       defaultCurrency={organization?.currency ?? "TZS"}

@@ -137,7 +137,7 @@ export function DeviceForm({ providers, stations, tanks, vehicles, defaultStatio
     if (!apiKey) return;
     try {
       await navigator.clipboard.writeText(apiKey);
-      toast.success("API key copied", "Store it in the probe configuration now — it is not shown again.");
+      toast.success("API key copied", "Store it in the probe configuration now - it is not shown again.");
     } catch {
       toast.warn("Could not copy", "Select the key manually and copy it.");
     }
@@ -155,7 +155,7 @@ export function DeviceForm({ providers, stations, tanks, vehicles, defaultStatio
           <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Ingest API key</h2>
           <p className="mt-1 text-[0.75rem] text-[var(--ink-3)]">
             This is the only time the raw key is shown. Only its SHA-256 hash is stored, so it cannot be recovered
-            afterwards — rotate it from the device list if it is lost.
+            afterwards - rotate it from the device list if it is lost.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <code className="flex-1 min-w-[16rem] rounded-[var(--radius-sm)] border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 font-mono text-[0.75rem] text-[var(--ink)] break-all">
@@ -329,7 +329,7 @@ content-type: application/json`}
                 description={
                   form.stationId
                     ? "Every tank at this station already has a probe. Choose another station or add a tank first."
-                    : "Add a tank before registering a fuel probe — a probe has to measure something."
+                    : "Add a tank before registering a fuel probe - a probe has to measure something."
                 }
                 action={
                   <Button variant="secondary" type="button" onClick={() => router.push("/tanks/new")}>

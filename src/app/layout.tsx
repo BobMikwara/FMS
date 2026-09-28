@@ -2,11 +2,10 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 import { ToastProvider } from "@/components/ui/feedback";
-import { startSimulator } from "@/server/integrations/simulator";
 
 export const metadata: Metadata = {
   title: {
-    default: "SmartFuel — Fuel Monitoring & Station Management",
+    default: "SmartFuel - Fuel Monitoring & Station Management",
     template: "%s · SmartFuel",
   },
   description:
@@ -34,15 +33,6 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
 };
-
-// Boot the synthetic probe simulator once per server process (demo mode only).
-if (typeof window === "undefined") {
-  try {
-    startSimulator();
-  } catch {
-    /* simulator is optional */
-  }
-}
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (

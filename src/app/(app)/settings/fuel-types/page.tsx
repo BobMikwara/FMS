@@ -11,8 +11,8 @@ export default async function FuelTypesPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const fuelTypes = listFuelTypes(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
+  const fuelTypes = (await listFuelTypes(user.organizationId));
+  const tanks = (await listAllTanks(user.organizationId));
 
   const rows = fuelTypes.map((fuel) => ({
     id: fuel.id,
@@ -34,7 +34,7 @@ export default async function FuelTypesPage() {
       />
 
       <Notice tone="info" title="Deleting a fuel type">
-        A fuel type in use by a tank cannot be deleted — reassign or archive those tanks first. This protects the movement
+        A fuel type in use by a tank cannot be deleted - reassign or archive those tanks first. This protects the movement
         ledger from losing its meaning.
       </Notice>
 

@@ -11,7 +11,7 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
     const from = params.get("from") ?? isoDaysAgo(14);
     const to = params.get("to") ?? new Date().toISOString();
     const stationId = params.get("stationId") ?? undefined;
-    const result = listEvents({
+    const result = (await listEvents({
       orgId: ctx.user.organizationId,
       stationId,
       tankId: params.get("tankId") ?? undefined,
@@ -21,8 +21,16 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
       to,
       page,
       pageSize,
-    });
-    const totals = movementTotals(ctx.user.organizationId, from, to, stationId);
+      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+    }));
+    const totals = (await movementTotals(
+      ctx.user.organizationId,
+      from,
+      to,
+      stationId,
+      undefined,
+      ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+    ));
     return jsonOk({
       rows: result.rows,
       total: result.total,

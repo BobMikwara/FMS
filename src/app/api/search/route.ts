@@ -9,7 +9,7 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
     const q = params.get("q") ?? "";
     if (q.trim().length < 1) return jsonOk({ query: q, hits: [], total: 0 });
     const limit = Math.min(Math.max(Number(params.get("limit") ?? 8) || 8, 1), 25);
-    const hits = globalSearch(ctx.user.organizationId, q, limit);
+    const hits = (await globalSearch(ctx.user.organizationId, q, limit, ctx.user.stationIds));
     const grouped: Record<string, typeof hits> = {};
     for (const hit of hits) {
       (grouped[hit.kind] ??= []).push(hit);

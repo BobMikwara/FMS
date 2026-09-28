@@ -21,12 +21,12 @@ interface OrganizationSettings {
 }
 
 const CURRENCIES = [
-  { value: "TZS", label: "TZS — Tanzanian shilling" },
-  { value: "KES", label: "KES — Kenyan shilling" },
-  { value: "UGX", label: "UGX — Ugandan shilling" },
-  { value: "USD", label: "USD — US dollar" },
-  { value: "EUR", label: "EUR — Euro" },
-  { value: "GBP", label: "GBP — Pound sterling" },
+  { value: "TZS", label: "TZS - Tanzanian shilling" },
+  { value: "KES", label: "KES - Kenyan shilling" },
+  { value: "UGX", label: "UGX - Ugandan shilling" },
+  { value: "USD", label: "USD - US dollar" },
+  { value: "EUR", label: "EUR - Euro" },
+  { value: "GBP", label: "GBP - Pound sterling" },
 ];
 
 const VOLUME_UNITS = [

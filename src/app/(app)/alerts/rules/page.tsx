@@ -10,9 +10,17 @@ export default async function AlertRulesPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const rules = listAlertRules(user.organizationId);
-  const tanks = listAllTanks(user.organizationId);
-  const stations = listAllStations(user.organizationId);
+  const allTanks = await listAllTanks(user.organizationId);
+  const tanks = allTanks.filter((tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId));
+  const stations = (await listAllStations(user.organizationId)).filter(
+    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+  );
+  const rules = (await listAlertRules(user.organizationId)).filter((rule) => {
+    if (user.stationIds.length === 0) return true;
+    if (rule.stationId) return user.stationIds.includes(rule.stationId);
+    if (rule.tankId) return tanks.some((tank) => tank.id === rule.tankId);
+    return false;
+  });
   const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
 

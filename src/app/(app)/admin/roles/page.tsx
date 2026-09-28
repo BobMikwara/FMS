@@ -13,8 +13,8 @@ export default async function RolesPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const roles = listRoles();
-  const users = listUsers(user.organizationId);
+  const roles = (await listRoles());
+  const users = (await listUsers(user.organizationId));
 
   const grouped = new Map<string, string[]>();
   for (const role of roles) {
