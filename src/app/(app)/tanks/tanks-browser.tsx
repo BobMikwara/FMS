@@ -169,7 +169,8 @@ export function TanksBrowser({
       },
       {
         key: "actions",
-        header: "",
+        header: "Actions",
+        numeric: true,
         cell: (row) => (
           <div className="flex items-center justify-end gap-1">
             <Link href={`/tanks/${row.id}`} className="btn btn-ghost btn-sm">
