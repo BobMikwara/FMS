@@ -188,7 +188,8 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
       },
       {
         key: "actions",
-        header: "",
+        header: "Actions",
+        numeric: true,
         cell: (row) => (
           <div className="flex items-center justify-end gap-1">
             <Button size="sm" variant="ghost" onClick={() => setRotateId(row.id)}>
