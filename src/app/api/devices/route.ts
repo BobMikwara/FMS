@@ -35,9 +35,12 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
       pageSize,
       stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
     }));
-    const stations = (await listAllStations(ctx.user.organizationId));
-    const tanks = (await listAllTanks(ctx.user.organizationId));
-    const vehicles = (await listAllVehicles(ctx.user.organizationId));
+    // Name lookups deliberately include archived stations/tanks/vehicles: a
+    // device keeps its assignment when the target is archived, and the table
+    // must still display that existing relationship instead of "Unassigned".
+    const stations = (await listAllStations(ctx.user.organizationId, true));
+    const tanks = (await listAllTanks(ctx.user.organizationId, true));
+    const vehicles = (await listAllVehicles(ctx.user.organizationId, true));
     const stationName = new Map(stations.map((station) => [station.id, station.name]));
     const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
     const vehicleName = new Map(vehicles.map((vehicle) => [vehicle.id, `${vehicle.name} (${vehicle.plateNumber})`]));

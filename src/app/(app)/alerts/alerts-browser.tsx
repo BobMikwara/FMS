@@ -173,7 +173,8 @@ export function AlertsBrowser({
       { key: "status", header: "Status", width: "11%", cell: (row) => <AlertStatusBadge status={row.status} /> },
       {
         key: "actions",
-        header: "",
+        header: "Actions",
+        numeric: true,
         width: "22%",
         cell: (row) => (
           <div className="flex items-center justify-end gap-1.5">
