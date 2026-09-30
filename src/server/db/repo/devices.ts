@@ -279,9 +279,9 @@ export async function listVehicles(filter: VehicleFilter): Promise<{ rows: Vehic
   return { rows: rows.map(mapVehicle), total };
 }
 
-export async function listAllVehicles(orgId: string): Promise<Vehicle[]> {
+export async function listAllVehicles(orgId: string, includeArchived = false): Promise<Vehicle[]> {
   return (await query<Record<string, unknown>>(
-    "SELECT * FROM vehicles WHERE organization_id = ? AND is_archived = 0 ORDER BY name",
+    `SELECT * FROM vehicles WHERE organization_id = ? ${includeArchived ? "" : "AND is_archived = 0"} ORDER BY name`,
     [orgId],
   )).map(mapVehicle);
 }

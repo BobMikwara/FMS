@@ -29,14 +29,21 @@ export default async function DevicesPage() {
       (device.tankId && tankIds.has(device.tankId)) ||
       (device.vehicleId && vehicles.has(device.vehicleId)),
   );
-  const stationName = new Map(stations.map((station) => [station.id, station.name]));
-  const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
+  // Name lookups deliberately include archived stations/tanks/vehicles: a
+  // device keeps its assignment when the target is archived, and the table
+  // must still display that existing relationship instead of "Unassigned".
+  // These maps are name-only; row filtering above keeps using the scoped lists.
+  const stationName = new Map((await listAllStations(user.organizationId, true)).map((station) => [station.id, station.name]));
+  const tankName = new Map((await listAllTanks(user.organizationId, true)).map((tank) => [tank.id, tank.name]));
+  const vehicleName = new Map(
+    (await listAllVehicles(user.organizationId, true)).map((vehicle) => [vehicle.id, `${vehicle.name} (${vehicle.plateNumber})`]),
+  );
 
   const rows = devices.map((device) => ({
     ...device,
     stationName: device.stationId ? (stationName.get(device.stationId) ?? null) : null,
     tankName: device.tankId ? (tankName.get(device.tankId) ?? null) : null,
-    vehicleName: device.vehicleId ? (vehicles.get(device.vehicleId) ?? null) : null,
+    vehicleName: device.vehicleId ? (vehicleName.get(device.vehicleId) ?? null) : null,
   }));
 
   return (

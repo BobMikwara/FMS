@@ -120,22 +120,45 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
       {
         key: "assignment",
         header: "Assigned to",
-        cell: (row) =>
-          row.type === "fuel_probe" ? (
-            row.tankName ? (
-              <Link href={`/tanks/${row.tankId}`} className="text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
-                {row.tankName}
-              </Link>
-            ) : (
-              <span className="text-[0.75rem] text-[var(--ink-3)]">Not assigned</span>
-            )
-          ) : row.vehicleName ? (
-            <Link href="/vehicles" className="text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
-              {row.vehicleName}
-            </Link>
-          ) : (
-            <span className="text-[0.75rem] text-[var(--ink-3)]">Not assigned</span>
-          ),
+        cell: (row) => {
+          const isProbe = row.type === "fuel_probe";
+          const entityName = isProbe ? row.tankName : row.vehicleName;
+          const entityId = isProbe ? row.tankId : row.vehicleId;
+          const entityHref = isProbe ? (row.tankId ? `/tanks/${row.tankId}` : null) : "/vehicles";
+          // A device is genuinely unassigned only when no relationship resolves.
+          if (!entityName && !row.stationName) {
+            return <span className="text-[0.75rem] text-[var(--ink-3)]">Unassigned</span>;
+          }
+          return (
+            <div className="min-w-0">
+              {entityName ? (
+                entityId && entityHref ? (
+                  <Link href={entityHref} className="block truncate text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
+                    {entityName}
+                  </Link>
+                ) : (
+                  <p className="truncate text-[0.8125rem] text-[var(--brand-ink)]">{entityName}</p>
+                )
+              ) : null}
+              {row.stationName ? (
+                row.stationId ? (
+                  <Link
+                    href={`/stations/${row.stationId}`}
+                    className={`block truncate hover:underline ${
+                      entityName
+                        ? "mt-0.5 text-[0.75rem] text-[var(--ink-3)]"
+                        : "text-[0.8125rem] text-[var(--brand-ink)]"
+                    }`}
+                  >
+                    {row.stationName}
+                  </Link>
+                ) : (
+                  <p className="truncate text-[0.8125rem] text-[var(--ink)]">{row.stationName}</p>
+                )
+              ) : null}
+            </div>
+          );
+        },
       },
       { key: "status", header: "Status", cell: (row) => <DeviceStatusBadge status={row.status} /> },
       {
