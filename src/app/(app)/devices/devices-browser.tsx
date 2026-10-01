@@ -24,6 +24,7 @@ interface DeviceRow {
   tankId: string | null;
   vehicleId: string | null;
   status: "online" | "delayed" | "offline" | "fault" | "never_connected";
+  isActive: boolean;
   lastSeenAt: string | null;
   lastReadingAt: string | null;
   signalStrength: number | null;
@@ -33,7 +34,17 @@ interface DeviceRow {
   vehicleName: string | null;
 }
 
-export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
+export function DevicesBrowser({
+  initialRows,
+  canCreate,
+  canEdit,
+  canRetire,
+}: {
+  initialRows: DeviceRow[];
+  canCreate: boolean;
+  canEdit: boolean;
+  canRetire: boolean;
+}) {
   const query = useResourceQuery<DeviceRow>({
     endpoint: "/api/devices",
     initial: { rows: initialRows, total: initialRows.length, page: 1, pageSize: 25 },
@@ -61,6 +72,28 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
         query.refresh();
       } else {
         toast.error(payload.error?.message ?? "Could not retire the device.");
+      }
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restore = async (device: DeviceRow) => {
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/devices/${device.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isActive: true, status: device.lastSeenAt ? "offline" : "never_connected" }),
+      });
+      const payload = await response.json();
+      if (payload.ok) {
+        toast.success("Device restored", `${device.serialNumber} can submit readings again.`);
+        query.refresh();
+      } else {
+        toast.error(payload.error?.message ?? "Could not restore the device.");
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -137,7 +170,13 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
             <span className="text-[0.75rem] text-[var(--ink-3)]">Not assigned</span>
           ),
       },
-      { key: "status", header: "Status", cell: (row) => <DeviceStatusBadge status={row.status} /> },
+      {
+        key: "status",
+        header: "Status",
+        cell: (row) => row.isActive
+          ? <DeviceStatusBadge status={row.status} />
+          : <span className="badge badge-neutral">Retired</span>,
+      },
       {
         key: "lastSeen",
         header: "Last seen",
@@ -166,19 +205,28 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
       {
         key: "actions",
         header: "",
-        cell: (row) => (
+        cell: (row) => canEdit || canRetire ? (
           <div className="flex items-center justify-end gap-1">
-            <Button size="sm" variant="ghost" onClick={() => setRotateId(row.id)}>
-              Rotate key
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setRetireId(row.id)}>
-              Retire
-            </Button>
+            {canEdit ? (
+              <Button size="sm" variant="ghost" onClick={() => setRotateId(row.id)}>
+                Rotate key
+              </Button>
+            ) : null}
+            {canRetire && row.isActive ? (
+              <Button size="sm" variant="ghost" onClick={() => setRetireId(row.id)}>
+                Retire
+              </Button>
+            ) : null}
+            {canEdit && !row.isActive ? (
+              <Button size="sm" variant="ghost" onClick={() => restore(row)} loading={busy}>
+                Restore
+              </Button>
+            ) : null}
           </div>
-        ),
+        ) : null,
       },
     ],
-    [],
+    [busy, canEdit, canRetire, restore],
   );
 
   return (
@@ -212,6 +260,17 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
           ]}
         />
         <Select
+          aria-label="Filter active or retired devices"
+          className="w-40"
+          value={query.filters.active ?? ""}
+          onChange={(event) => query.setFilter("active", event.target.value)}
+          options={[
+            { value: "", label: "All devices" },
+            { value: "true", label: "Active devices" },
+            { value: "false", label: "Retired devices" },
+          ]}
+        />
+        <Select
           aria-label="Filter by reporting state"
           className="w-48"
           value={query.filters.reporting ?? ""}
@@ -236,7 +295,8 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
             { header: "Station", value: (row) => row.stationName ?? "" },
             { header: "Tank", value: (row) => row.tankName ?? "" },
             { header: "Vehicle", value: (row) => row.vehicleName ?? "" },
-            { header: "Status", value: (row) => row.status },
+            { header: "Status", value: (row) => row.isActive ? row.status : "retired" },
+            { header: "Active", value: (row) => row.isActive ? "Yes" : "No" },
             { header: "Last seen", value: (row) => row.lastSeenAt ?? "" },
             { header: "Signal", value: (row) => row.signalStrength ?? "" },
             { header: "Battery (%)", value: (row) => row.batteryPct ?? "" },
@@ -249,11 +309,11 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
           icon="device"
           title="No devices have been registered yet"
           description="Fuel probes and GPS trackers feed the platform. Register a device and assign it to a tank or vehicle."
-          action={
+          action={canCreate ? (
             <Link href="/devices/new" className="btn btn-primary btn-sm">
               Register device
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -273,11 +333,11 @@ export function DevicesBrowser({ initialRows }: { initialRows: DeviceRow[] }) {
           searchPlaceholder="Search devices by serial, provider or assignment…"
           emptyTitle="No devices have been registered yet"
           emptyDescription="Register a device to start collecting readings."
-          emptyAction={
+          emptyAction={canCreate ? (
             <Link href="/devices/new" className="btn btn-primary btn-sm">
               Register device
             </Link>
-          }
+          ) : undefined}
         />
       )}
 

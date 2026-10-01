@@ -51,7 +51,7 @@ const TIMEZONES = [
   { value: "UTC", label: "UTC" },
 ];
 
-export function OrganizationSettingsForm({ organization }: { organization: OrganizationSettings }) {
+export function OrganizationSettingsForm({ organization, canManage }: { organization: OrganizationSettings; canManage: boolean }) {
   const [form, setForm] = useState({
     name: organization.name,
     slug: organization.slug,
@@ -123,7 +123,7 @@ export function OrganizationSettingsForm({ organization }: { organization: Organ
         </div>
       ) : null}
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
+      <fieldset disabled={!canManage} className="mt-5 grid gap-4 sm:grid-cols-2">
         <Field label="Organization name" htmlFor="org-name" required>
           <Input
             id="org-name"
@@ -180,9 +180,10 @@ export function OrganizationSettingsForm({ organization }: { organization: Organ
             options={TIMEZONES}
           />
         </Field>
-      </div>
+      </fieldset>
 
-      <div className="mt-5 flex items-center gap-3 border-t border-[var(--line)] pt-5">
+      {canManage ? (
+        <div className="mt-5 flex items-center gap-3 border-t border-[var(--line)] pt-5">
         <Button type="submit" loading={busy} disabled={!dirty}>
           Save changes
         </Button>
@@ -204,7 +205,8 @@ export function OrganizationSettingsForm({ organization }: { organization: Organ
         >
           Reset
         </button>
-      </div>
+        </div>
+      ) : null}
 
       <p className="mt-3 text-[0.6875rem] leading-relaxed text-[var(--ink-3)]">
         Readings are always stored in litres and Celsius at the point of capture; these settings control how values are

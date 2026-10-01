@@ -1,3 +1,4 @@
+import { hasOrganizationWideStationAccess, isPlatformOwner, userCanAccessStation } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
@@ -12,8 +13,10 @@ export default async function InviteUserPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const roles = (await listRoles());
-  const stations = (await listAllStations(user.organizationId));
+  const roles = (await listRoles()).filter((role) =>
+    hasOrganizationWideStationAccess(user) || (role.key !== "admin" && !isPlatformOwner(role.key)),
+  );
+  const stations = (await listAllStations(user.organizationId)).filter((station) => userCanAccessStation(user, station.id));
 
   return (
     <div className="space-y-5">

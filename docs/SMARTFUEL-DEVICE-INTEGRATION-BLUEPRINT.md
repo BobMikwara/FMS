@@ -1144,6 +1144,7 @@ A device can be online while reporting an invalid temperature or impossible volu
 ## 17.2 Existing behavior
 
 - Device status begins as `never_connected`.
+- A never-connected device receives the configured offline-timeout grace period from its creation time. If no message arrives by then, the sweep marks it offline and raises an alert.
 - A valid fuel reading sets the device online and updates `lastSeenAt`/`lastReadingAt`.
 - Invalid readings create an `invalid_reading` alert and set the device to `fault`.
 - `sweepDeviceHealth` uses the configured `deviceOfflineMinutes` value, defaulting to 10 minutes.

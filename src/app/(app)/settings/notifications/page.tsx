@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
 import { listUsers } from "@/server/db/repo/core";
@@ -19,7 +20,8 @@ export default async function NotificationSettingsPage() {
   if (!user) redirect("/login");
 
   const settings = (await getSettings(user.organizationId));
-  const users = (await listUsers(user.organizationId));
+  const users = (await listUsers(user.organizationId, stationScopeForUser(user)))
+    .filter((entry) => userCanAccessStationScopedUser(user, entry.stationIds, entry.roleKey));
 
   const notifications = (settings.notifications ?? {}) as Record<string, unknown>;
 

@@ -1,7 +1,8 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Building2, Fuel, Bell, Sliders } from "lucide-react";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { getOrganization } from "@/server/db/repo/core";
 import { listAllStations } from "@/server/db/repo/stations";
 import { PageHeader } from "@/components/ui/layout";
@@ -41,7 +42,15 @@ export default async function SettingsPage() {
   if (!user) redirect("/login");
 
   const organization = (await getOrganization(user.organizationId));
-  const stationCount = (await listAllStations(user.organizationId)).length;
+  const visibleSections = SECTIONS.filter((section) =>
+    section.href === "/settings" ||
+    (section.href === "/settings/fuel-types" && hasPermission(user, "fuel_types.manage")) ||
+    (["/settings/notifications", "/settings/system"].includes(section.href) && hasPermission(user, "settings.manage")),
+  );
+  const stationIds = stationScopeForUser(user);
+  const stationCount = (await listAllStations(user.organizationId)).filter(
+    (station) => stationIds === undefined || stationIds.includes(station.id),
+  ).length;
 
   return (
     <div className="space-y-5">
@@ -52,7 +61,7 @@ export default async function SettingsPage() {
       />
 
       <nav aria-label="Settings sections" className="grid gap-3 sm:grid-cols-2">
-        {SECTIONS.map((section) => {
+        {visibleSections.map((section) => {
           const Icon = section.icon;
           const active = section.href === "/settings";
           return (
@@ -91,6 +100,7 @@ export default async function SettingsPage() {
             plan: organization.plan,
             stationCount,
           }}
+          canManage={hasPermission(user, "organizations.manage")}
         />
       ) : null}
     </div>

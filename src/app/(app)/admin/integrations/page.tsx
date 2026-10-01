@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { Plug, KeyRound, CheckCircle2, XCircle } from "lucide-react";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listIntegrations } from "@/server/db/repo/core";
 import { PageHeader, Notice } from "@/components/ui/layout";
 import { Badge } from "@/components/ui/feedback";
@@ -66,7 +66,7 @@ export default async function IntegrationsPage() {
         variable holds each credential and whether the platform can reach the vendor.
       </Notice>
 
-      <IntegrationsBrowser initialRows={rows} />
+      <IntegrationsBrowser initialRows={rows} canManage={hasPermission(user, "integrations.manage")} />
 
       <section className="card p-5">
         <h2 className="flex items-center gap-2 text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">

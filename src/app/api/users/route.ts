@@ -1,3 +1,4 @@
+import { hasOrganizationWideStationAccess, isPlatformOwner, stationScopeForUser, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import type { User } from "@/server/domain/types";
 import { createUser, listRoles, listUsers, setUserStations } from "@/server/db/repo/core";
 import { listAllStations } from "@/server/db/repo/stations";
@@ -23,13 +24,17 @@ export const GET = withPermission("users.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const search = params.get("search") ?? undefined;
-    let rows = (await listUsers(ctx.user.organizationId));
+    let rows = (await listUsers(ctx.user.organizationId, stationScopeForUser(ctx.user)))
+      .filter((user) => userCanAccessStationScopedUser(ctx.user, user.stationIds, user.roleKey));
     if (search) {
       const term = search.toLowerCase();
       rows = rows.filter((user) => `${user.name} ${user.email} ${user.roleName}`.toLowerCase().includes(term));
     }
     const { page, pageSize } = parsePagination(params, 20);
-    const paged = rows.slice((page - 1) * pageSize, page * pageSize);
+    const paged = rows.slice((page - 1) * pageSize, page * pageSize).map((user) => ({
+      ...user,
+      stationIds: user.stationIds.filter((stationId) => userCanAccessStation(ctx.user, stationId)),
+    }));
     return jsonOk({ rows: paged, total: rows.length, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -54,18 +59,26 @@ export const POST = withPermission("users.create", async (request, ctx) => {
     const roles = (await listRoles());
     const role = roles.find((row) => row.id === roleId);
     if (!role) throw new ApiError(422, "Select a valid role.", "validation_error");
-    // Never allow a non-owner to mint a more powerful account.
-    if (role.key === "super_admin" && ctx.user.roleKey !== "super_admin") {
+    // Only organization-wide administrators may create organization-wide roles.
+    if (isPlatformOwner(role.key) && !isPlatformOwner(ctx.user.roleKey)) {
       throw new ApiError(403, "Only an owner can create another owner account.", "forbidden");
+    }
+    if (!hasOrganizationWideStationAccess(ctx.user) && (role.key === "admin" || isPlatformOwner(role.key))) {
+      throw new ApiError(403, "A station-scoped user cannot grant organization-wide access.", "forbidden");
     }
 
     const stations = (await listAllStations(ctx.user.organizationId));
     const requestedStations = Array.isArray(body.stationIds) ? (body.stationIds as string[]) : [];
-    const stationIds = requestedStations.filter((id) => stations.some((station) => station.id === id));
-    if (role.key === "manager" || role.key === "operator") {
-      if (stationIds.length === 0) {
-        throw new ApiError(422, "This role is scoped to stations — select at least one.", "validation_error");
-      }
+    const stationIds = [...new Set(requestedStations)];
+    if (stationIds.some((id) => !stations.some((station) => station.id === id))) {
+      throw new ApiError(422, "One or more selected stations do not exist in your organization.", "validation_error");
+    }
+    if (stationIds.some((id) => !userCanAccessStation(ctx.user, id))) {
+      throw new ApiError(403, "You cannot assign a user to a station outside your own scope.", "forbidden");
+    }
+    const organizationWideRole = role.key === "admin" || isPlatformOwner(role.key);
+    if (!organizationWideRole && stationIds.length === 0) {
+      throw new ApiError(422, "Assign at least one station to every non-administrator account.", "validation_error");
     }
 
   let user!: User;

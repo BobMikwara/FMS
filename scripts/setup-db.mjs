@@ -9,6 +9,10 @@ const databaseUrl = process.env.DATABASE_URL ?? "file:./db/smartfuel.db";
 const isPostgres = process.env.DB_PROVIDER === "postgresql" || /^postgres(?:ql)?:\/\//.test(databaseUrl);
 const reset = process.argv.includes("--reset");
 
+if (!isPostgres && reset && process.env.CONFIRM_LOCAL_SQLITE_RESET !== "YES") {
+  throw new Error("Refusing destructive SQLite reset. Set CONFIRM_LOCAL_SQLITE_RESET=YES only for a disposable local database.");
+}
+
 if (isPostgres) {
   if (reset) throw new Error("Refusing to reset a PostgreSQL database from this script. Use Supabase migrations and an explicit administrative procedure.");
   const sql = postgres(databaseUrl, { prepare: false, ssl: "require", max: 1, connect_timeout: 10 });
@@ -25,7 +29,7 @@ if (isPostgres) {
         await transaction.unsafe(migration);
         await transaction`INSERT INTO schema_migrations (version) VALUES (${version})`;
       });
-      console.log(`Applied PostgreSQL migration ${file}`);
+      process.stdout.write(`Applied PostgreSQL migration ${file}\n`);
     }
   } finally {
     await sql.end({ timeout: 5 });
@@ -46,4 +50,4 @@ const database = new DatabaseSync(dbPath);
 database.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
 database.exec(readFileSync(join(ROOT, "db", "schema.sqlite.sql"), "utf8"));
 database.close();
-console.log(`SQLite schema ready at ${dbPath}`);
+process.stdout.write(`SQLite schema ready at ${dbPath}\n`);

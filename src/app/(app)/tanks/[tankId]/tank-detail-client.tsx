@@ -26,18 +26,23 @@ import { tankStateForPercent } from "@/lib/status";
 
 export interface TankDetailProps {
   tank: Tank;
-  station: Station | null;
+  station: Pick<Station, "name"> | null;
   fuelType: FuelType | null;
-  device: Device | null;
+  device: Omit<Device, "apiKeyHash"> | null;
+  canViewAlerts: boolean;
+  canViewReadings: boolean;
+  canViewMovements: boolean;
+  canViewDevices: boolean;
+  canAcknowledge: boolean;
+  canResolve: boolean;
+  canNote: boolean;
   detail: {
     fillPercent: number;
     remainingCapacity: number;
-    status: Tank["status"];
     dataState: "live" | "delayed" | "stale" | "offline";
-    lastUpdateAgeMinutes: number;
-    todayConsumption: number;
-    todayRefills: number;
-    coverage: { avgDailyConsumption: number; daysRemaining: number | null };
+    todayConsumption: number | null;
+    todayRefills: number | null;
+    coverage: { avgDailyConsumption: number; daysRemaining: number | null } | null;
     reconciliation: {
       openingStock: number;
       refills: number;
@@ -47,7 +52,7 @@ export interface TankDetailProps {
       variance: number;
       variancePct: number;
       exceedsThreshold: boolean;
-    };
+    } | null;
     history: { bucket: string; avgVolume: number; avgPercent: number; avgTemp: number; avgWater: number }[];
     events: {
       id: string;
@@ -94,7 +99,20 @@ const DATA_STATE_COPY: Record<string, { label: string; tone: "ok" | "warn" | "cr
   offline: { label: "Offline", tone: "crit", note: "The probe is not reporting. The last valid reading is preserved below." },
 };
 
-export function TankDetailClient({ tank, station, fuelType, device, detail }: TankDetailProps) {
+export function TankDetailClient({
+  tank,
+  station,
+  fuelType,
+  device,
+  detail,
+  canViewAlerts,
+  canViewReadings,
+  canViewMovements,
+  canViewDevices,
+  canAcknowledge,
+  canResolve,
+  canNote,
+}: TankDetailProps) {
   const [tab, setTab] = useState<TabId>("overview");
   const [noteOpen, setNoteOpen] = useState(false);
   const [noteBody, setNoteBody] = useState("");
@@ -104,6 +122,14 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
   const [notes, setNotes] = useState<Record<string, { id: string; body: string; userName: string; createdAt: string }[]>>({});
   const toast = useToast();
 
+  const canViewReplay = canViewReadings && canViewMovements;
+  const visibleTabs = TABS.filter((item) => {
+    if (item.id === "readings") return canViewReadings;
+    if (item.id === "movements") return canViewMovements;
+    if (item.id === "replay" || item.id === "reconciliation") return canViewReplay;
+    if (item.id === "alerts") return canViewAlerts;
+    return true;
+  });
   const state = DATA_STATE_COPY[detail.dataState] ?? DATA_STATE_COPY.offline;
   const latest = detail.latestReading;
   const visualStatus: Tank["status"] =
@@ -256,37 +282,43 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
             <div className="min-w-0 flex-1 space-y-3">
               <Metric label="Fill level" value={formatPercent(detail.fillPercent, 1)} />
               <Metric label="Free capacity" value={`${formatNumber(Math.round(detail.remainingCapacity))} L`} />
-              <Metric
-                label="Stock coverage"
-                value={detail.coverage.daysRemaining == null ? "Not available" : `${detail.coverage.daysRemaining.toFixed(1)} days`}
-                hint={
-                  detail.coverage.avgDailyConsumption > 0
-                    ? `${formatNumber(Math.round(detail.coverage.avgDailyConsumption))} L/day average`
-                    : "No consumption recorded yet"
-                }
-              />
+              {canViewMovements && detail.coverage ? (
+                <Metric
+                  label="Stock coverage"
+                  value={detail.coverage.daysRemaining == null ? "Not available" : `${detail.coverage.daysRemaining.toFixed(1)} days`}
+                  hint={
+                    detail.coverage.avgDailyConsumption > 0
+                      ? `${formatNumber(Math.round(detail.coverage.avgDailyConsumption))} L/day average`
+                      : "No consumption recorded yet"
+                  }
+                />
+              ) : null}
             </div>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Tile
-              label="Fuel consumption / tank outflow (today)"
-              value={`${formatNumber(detail.todayConsumption)} L`}
-              tone="neutral"
-            />
-            <Tile label="Refills (today)" value={`${formatNumber(detail.todayRefills)} L`} tone="ok" />
-            <Tile
-              label="Reconciliation variance"
-              value={`${detail.reconciliation.variance > 0 ? "+" : ""}${formatNumber(Math.round(detail.reconciliation.variance))} L`}
-              tone={detail.reconciliation.exceedsThreshold ? "warn" : "neutral"}
-              hint={detail.reconciliation.exceedsThreshold ? "Above the configured threshold" : "Within the configured threshold"}
-            />
-          </div>
+          {canViewMovements ? (
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Tile
+                label="Fuel consumption / tank outflow (today)"
+                value={`${formatNumber(detail.todayConsumption ?? 0)} L`}
+                tone="neutral"
+              />
+              <Tile label="Refills (today)" value={`${formatNumber(detail.todayRefills ?? 0)} L`} tone="ok" />
+              {canViewReadings && detail.reconciliation ? (
+                <Tile
+                  label="Reconciliation variance"
+                  value={`${detail.reconciliation.variance > 0 ? "+" : ""}${formatNumber(Math.round(detail.reconciliation.variance))} L`}
+                  tone={detail.reconciliation.exceedsThreshold ? "warn" : "neutral"}
+                  hint={detail.reconciliation.exceedsThreshold ? "Above the configured threshold" : "Within the configured threshold"}
+                />
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
 
       <nav className="flex flex-wrap gap-1 border-b border-[var(--line)]" aria-label="Tank sections">
-        {TABS.map((item) => (
+        {visibleTabs.map((item) => (
           <button
             key={item.id}
             type="button"
@@ -306,8 +338,9 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
 
       {tab === "overview" ? (
         <div className="space-y-5">
-          <section className="card p-5">
-            <div className="flex items-center justify-between gap-3">
+          {canViewReadings ? (
+            <section className="card p-5">
+              <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Level trend</h3>
                 <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Measured volume per bucket over the last 7 days.</p>
@@ -331,7 +364,8 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
                 />
               )}
             </div>
-          </section>
+            </section>
+          ) : null}
 
           <div className="grid gap-5 lg:grid-cols-2">
             <section className="card p-5">
@@ -348,8 +382,9 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
               </dl>
             </section>
 
-            <section className="card p-5">
-              <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Connected device</h3>
+            {canViewDevices ? (
+              <section className="card p-5">
+                <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Connected device</h3>
               {device ? (
                 <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-3.5">
                   <Metric label="Serial number" value={device.serialNumber} />
@@ -371,7 +406,8 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
                   }
                 />
               )}
-            </section>
+              </section>
+            ) : null}
           </div>
 
           <section className="card p-5">
@@ -392,7 +428,7 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
       {tab === "movements" ? <MovementsTable events={detail.events} /> : null}
       {tab === "replay" ? <FuelReplay tankId={tank.id} tankName={tank.name} capacity={tank.capacity} /> : null}
 
-      {tab === "reconciliation" ? (
+      {tab === "reconciliation" && detail.reconciliation ? (
         <section className="card p-5">
           <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Inventory reconciliation (7 days)</h3>
           <p className="mt-1 max-w-2xl text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
@@ -433,6 +469,9 @@ export function TankDetailClient({ tank, station, fuelType, device, detail }: Ta
             setNoteOpen(true);
             refreshNotes(alertId);
           }}
+          canAcknowledge={canAcknowledge}
+          canResolve={canResolve}
+          canNote={canNote}
           ackPending={ackId}
         />
       ) : null}
@@ -635,6 +674,9 @@ function AlertsTable({
   onAcknowledge,
   onResolve,
   onOpenNote,
+  canAcknowledge,
+  canResolve,
+  canNote,
   ackPending,
 }: {
   alerts: AlertRow[];
@@ -642,6 +684,9 @@ function AlertsTable({
   onAcknowledge: (id: string) => void;
   onResolve: (id: string) => void;
   onOpenNote: (id: string) => void;
+  canAcknowledge: boolean;
+  canResolve: boolean;
+  canNote: boolean;
   ackPending: string | null;
 }) {
   const columns: Column<AlertRow>[] = [
@@ -662,23 +707,25 @@ function AlertsTable({
     {
       key: "actions",
       header: "",
-      cell: (row) => (
+      cell: (row) => canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
         <div className="flex items-center justify-end gap-2">
-          <Button size="sm" variant="ghost" onClick={() => onOpenNote(row.id)}>
-            Note
-          </Button>
-          {row.status === "active" ? (
+          {canNote ? (
+            <Button size="sm" variant="ghost" onClick={() => onOpenNote(row.id)}>
+              Note
+            </Button>
+          ) : null}
+          {row.status === "active" && canAcknowledge ? (
             <Button size="sm" variant="secondary" loading={ackPending === row.id} onClick={() => onAcknowledge(row.id)}>
               Acknowledge
             </Button>
           ) : null}
-          {row.status !== "resolved" ? (
+          {row.status !== "resolved" && canResolve ? (
             <Button size="sm" variant="primary" onClick={() => onResolve(row.id)}>
               Resolve
             </Button>
           ) : null}
         </div>
-      ),
+      ) : null,
     },
   ];
 

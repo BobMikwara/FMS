@@ -119,12 +119,25 @@ function mapRole(row: Record<string, unknown>): Role {
 /* Users                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export async function listUsers(orgId: string): Promise<User[]> {
+export async function listUsers(orgId: string, stationIds?: string[]): Promise<User[]> {
+  if (stationIds !== undefined && stationIds.length === 0) return [];
+  const stationPlaceholders = stationIds?.map(() => "?").join(", ");
+  const stationClause = stationIds === undefined
+    ? ""
+    : ` AND r.key NOT IN ('admin', 'super_admin', 'owner')
+        AND EXISTS (
+          SELECT 1 FROM user_stations matched
+          WHERE matched.user_id = u.id AND matched.station_id IN (${stationPlaceholders})
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM user_stations outside_scope
+          WHERE outside_scope.user_id = u.id AND outside_scope.station_id NOT IN (${stationPlaceholders})
+        )`;
   const rows = (await query<Record<string, unknown>>(
     `SELECT u.*, r.key AS role_key, r.name AS role_name, r.permissions AS role_permissions
      FROM users u JOIN roles r ON r.id = u.role_id
-     WHERE u.organization_id = ? ORDER BY u.created_at DESC`,
-    [orgId],
+     WHERE u.organization_id = ?${stationClause} ORDER BY u.created_at DESC`,
+    [orgId, ...(stationIds ?? []), ...(stationIds ?? [])],
   ));
   const stationMap = (await userStationMap(rows.map((r) => String(r.id))));
   return rows.map((row) => mapUser(row, stationMap));
@@ -229,8 +242,8 @@ export async function updateUser(
   return (await getUser(userId));
 }
 
-export async function deleteUser(userId: string): Promise<void> {
-  (await execute("DELETE FROM users WHERE id = ?", [userId]));
+export async function suspendUser(userId: string): Promise<User | null> {
+  return (await updateUser(userId, { status: "suspended" }));
 }
 
 export async function setUserStations(userId: string, stationIds: string[]): Promise<void> {
@@ -350,6 +363,7 @@ export interface AuditFilter {
   orgId: string;
   userId?: string;
   userIds?: string[];
+  stationIds?: string[];
   entity?: string;
   action?: string;
   search?: string;
@@ -359,9 +373,78 @@ export interface AuditFilter {
   pageSize?: number;
 }
 
+function reportStationLikePattern(stationId: string): string {
+  const jsonValue = JSON.stringify(stationId).slice(1, -1);
+  const escapedValue = jsonValue.replace(/[\\%_]/g, "\\$&");
+  return `%"stationId":"${escapedValue}"%`;
+}
+
 export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditLog[]; total: number }> {
+  if (filter.stationIds !== undefined && filter.stationIds.length === 0) return { rows: [], total: 0 };
+
   const where: string[] = ["l.user_id IN (SELECT id FROM users WHERE organization_id = ?)"];
   const params: unknown[] = [filter.orgId];
+  const stationCte = filter.stationIds === undefined
+    ? ""
+    : `WITH station_scope AS (SELECT id FROM stations WHERE organization_id = ? AND id IN (${filter.stationIds.map(() => "?").join(", ")}))`;
+  const stationCteParams = filter.stationIds === undefined ? [] : [filter.orgId, ...filter.stationIds];
+  if (filter.stationIds !== undefined) {
+    const stationClause = `(
+      (l.entity = 'station' AND l.entity_id IN (SELECT id FROM station_scope))
+      OR (l.entity = 'tank' AND l.entity_id IN (SELECT id FROM tanks WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'device' AND l.entity_id IN (
+        SELECT d.id FROM devices d WHERE d.organization_id = ?
+          AND (d.station_id IS NULL OR d.station_id IN (SELECT id FROM station_scope))
+          AND (d.tank_id IS NULL OR d.tank_id IN (
+            SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (SELECT id FROM station_scope)
+          ))
+          AND (d.vehicle_id IS NULL OR d.vehicle_id IN (
+            SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (SELECT id FROM station_scope)
+          ))
+          AND (
+            d.station_id IN (SELECT id FROM station_scope)
+            OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (SELECT id FROM station_scope))
+            OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (SELECT id FROM station_scope))
+          )
+      ))
+      OR (l.entity = 'vehicle' AND l.entity_id IN (SELECT id FROM vehicles WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'alert' AND l.entity_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'alert_note' AND l.entity_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'scheduled_report' AND l.entity_id IN (SELECT id FROM scheduled_reports WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'report' AND l.entity_id IN (
+        SELECT r.id FROM reports r WHERE r.organization_id = ? AND (${filter.stationIds.map(() => "r.filters LIKE ? ESCAPE '\\'").join(" OR ")})
+      ))
+      OR (l.entity = 'user' AND l.entity_id IN (
+        SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE u.organization_id = ?
+          AND r.key NOT IN ('admin', 'super_admin', 'owner')
+          AND EXISTS (
+            SELECT 1 FROM user_stations us
+            WHERE us.user_id = u.id AND us.station_id IN (SELECT id FROM station_scope)
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM user_stations us_out
+            WHERE us_out.user_id = u.id AND us_out.station_id NOT IN (SELECT id FROM station_scope)
+          )
+      ))
+    )`;
+    where.push(stationClause);
+    params.push(
+      filter.orgId, // tank
+      filter.orgId, // device
+      filter.orgId, // device tank constraint
+      filter.orgId, // device vehicle constraint
+      filter.orgId, // device tank match
+      filter.orgId, // device vehicle match
+      filter.orgId, // vehicle
+      filter.orgId, // alert
+      filter.orgId, // alert note
+      filter.orgId, // scheduled report
+      filter.orgId, // report
+      filter.orgId, // user
+      ...filter.stationIds.map(reportStationLikePattern),
+    );
+  }
   if (filter.userId) {
     where.push("l.user_id = ?");
     params.push(filter.userId);
@@ -394,13 +477,13 @@ export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditL
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = Number(
-    (await queryOne<{ n: number }>(`SELECT count(*) AS n FROM audit_logs l ${clause}`, params))?.n ?? 0,
+    (await queryOne<{ n: number }>(`${stationCte} SELECT count(*) AS n FROM audit_logs l ${clause}`, [...stationCteParams, ...params]))?.n ?? 0,
   );
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(5, filter.pageSize ?? 25));
   const rows = (await query<Record<string, unknown>>(
-    `SELECT l.* FROM audit_logs l ${clause} ORDER BY l.ts DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, (page - 1) * pageSize],
+    `${stationCte} SELECT l.* FROM audit_logs l ${clause} ORDER BY l.ts DESC LIMIT ? OFFSET ?`,
+    [...stationCteParams, ...params, pageSize, (page - 1) * pageSize],
   ));
   return { rows: rows.map(mapAuditLog), total };
 }
@@ -496,36 +579,67 @@ export async function getNotification(notificationId: string): Promise<Notificat
   return row ? mapNotification(row) : null;
 }
 
-export async function listNotifications(orgId: string, limit = 30, userId?: string): Promise<Notification[]> {
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+function notificationStationClause(orgId: string, stationIds?: string[]): { sql: string; params: unknown[] } {
+  if (stationIds === undefined) return { sql: "", params: [] };
+  if (stationIds.length === 0) return { sql: " AND 1 = 0", params: [] };
+  const placeholders = stationIds.map(() => "?").join(", ");
+  return {
+    sql: ` AND (
+      alert_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (${placeholders}))
+      OR alert_id IN (SELECT 'event:' || id FROM fuel_events WHERE organization_id = ? AND station_id IN (${placeholders}))
+    )`,
+    params: [orgId, ...stationIds, orgId, ...stationIds],
+  };
+}
+
+export async function listNotifications(
+  orgId: string,
+  limit = 30,
+  userId?: string,
+  stationIds?: string[],
+): Promise<Notification[]> {
+  if (stationIds !== undefined && stationIds.length === 0) return [];
+  const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const stationClause = notificationStationClause(orgId, stationIds);
   const rows = (await query<Record<string, unknown>>(
-    `SELECT * FROM notifications WHERE organization_id = ?${userClause} ORDER BY created_at DESC LIMIT ?`,
-    userId ? [orgId, userId, limit] : [orgId, limit],
+    `SELECT n.* FROM notifications n WHERE n.organization_id = ?${userClause}${stationClause.sql} ORDER BY n.created_at DESC LIMIT ?`,
+    [orgId, ...(userId ? [userId] : []), ...stationClause.params, limit],
   ));
   return rows.map(mapNotification);
 }
 
-export async function countUnreadNotifications(orgId: string, userId?: string): Promise<number> {
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+export async function countUnreadNotifications(orgId: string, userId?: string, stationIds?: string[]): Promise<number> {
+  if (stationIds !== undefined && stationIds.length === 0) return 0;
+  const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const stationClause = notificationStationClause(orgId, stationIds);
   const row = (await queryOne<{ n: number }>(
-    `SELECT count(*) AS n FROM notifications WHERE organization_id = ? AND is_read = 0${userClause}`,
-    userId ? [orgId, userId] : [orgId],
+    `SELECT count(*) AS n FROM notifications n WHERE n.organization_id = ? AND n.is_read = 0${userClause}${stationClause.sql}`,
+    [orgId, ...(userId ? [userId] : []), ...stationClause.params],
   ));
   return Number(row?.n ?? 0);
 }
 
-export async function markNotificationsRead(orgId: string, ids?: string[], userId?: string): Promise<number> {
+export async function markNotificationsRead(
+  orgId: string,
+  ids?: string[],
+  userId?: string,
+  stationIds?: string[],
+): Promise<number> {
+  if (stationIds !== undefined && stationIds.length === 0) return 0;
   const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+  const stationClause = notificationStationClause(orgId, stationIds);
   if (ids && ids.length > 0) {
     const placeholders = ids.map(() => "?").join(", ");
-    const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})${userClause}`, [
-      orgId,
-      ...ids,
-      ...(userId ? [userId] : []),
-    ]);
+    const result = await execute(
+      `UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})${userClause}${stationClause.sql}`,
+      [orgId, ...ids, ...(userId ? [userId] : []), ...stationClause.params],
+    );
     return result.changes;
   }
-  const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ?${userClause}`, [orgId, ...(userId ? [userId] : [])]);
+  const result = await execute(
+    `UPDATE notifications SET is_read = 1 WHERE organization_id = ?${userClause}${stationClause.sql}`,
+    [orgId, ...(userId ? [userId] : []), ...stationClause.params],
+  );
   return result.changes;
 }
 
@@ -534,7 +648,7 @@ function mapNotification(row: Record<string, unknown>): Notification {
     id: String(row.id),
     organizationId: String(row.organization_id),
     userId: row.user_id == null ? null : String(row.user_id),
-    alertId: row.alert_id == null ? null : String(row.alert_id),
+    alertId: row.alert_id == null || String(row.alert_id).startsWith("event:") ? null : String(row.alert_id),
     title: String(row.title),
     body: String(row.body),
     severity: String(row.severity) as Notification["severity"],
@@ -654,10 +768,6 @@ export async function updateIntegration(
   values.push(integrationId);
   (await execute(`UPDATE integrations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
   return (await getIntegration(integrationId));
-}
-
-export async function deleteIntegration(integrationId: string): Promise<void> {
-  (await execute("DELETE FROM integrations WHERE id = ?", [integrationId]));
 }
 
 function mapIntegration(row: Record<string, unknown>): Integration {

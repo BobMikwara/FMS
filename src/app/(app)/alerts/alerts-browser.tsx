@@ -52,9 +52,17 @@ const TYPE_LABELS: Record<string, string> = {
 export function AlertsBrowser({
   initialRows,
   stations,
+  canAcknowledge,
+  canResolve,
+  canNote,
+  canViewRules,
 }: {
   initialRows: AlertRow[];
   stations: { id: string; name: string }[];
+  canAcknowledge: boolean;
+  canResolve: boolean;
+  canNote: boolean;
+  canViewRules: boolean;
 }) {
   const query = useResourceQuery<AlertRow>({
     endpoint: "/api/alerts",
@@ -175,27 +183,29 @@ export function AlertsBrowser({
         key: "actions",
         header: "",
         width: "22%",
-        cell: (row) => (
+        cell: (row) => canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
           <div className="flex items-center justify-end gap-1.5">
-            <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
-              Note
-            </Button>
-            {row.status === "active" ? (
+            {canNote ? (
+              <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
+                Note
+              </Button>
+            ) : null}
+            {row.status === "active" && canAcknowledge ? (
               <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
                 Acknowledge
               </Button>
             ) : null}
-            {row.status !== "resolved" ? (
+            {row.status !== "resolved" && canResolve ? (
               <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
                 Resolve
               </Button>
             ) : null}
           </div>
-        ),
+        ) : null,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [busyId],
+    [busyId, canAcknowledge, canNote, canResolve, canViewRules],
   );
 
   return (
@@ -265,11 +275,11 @@ export function AlertsBrowser({
           icon="alert"
           title="No alerts match your filters"
           description="Try a different status, severity or station. You can also tune the rules that raise alerts."
-          action={
+          action={canViewRules ? (
             <Link href="/alerts/rules" className="btn btn-secondary btn-sm">
               Review alert rules
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -291,21 +301,25 @@ export function AlertsBrowser({
                 {row.tankName ? <span>{row.tankName}</span> : null}
                 <span>{timeAgo(row.createdAt)}</span>
               </div>
-              <div className="flex flex-wrap justify-end gap-1.5">
-                <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
-                  Note
-                </Button>
-                {row.status === "active" ? (
-                  <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
-                    Acknowledge
-                  </Button>
-                ) : null}
-                {row.status !== "resolved" ? (
-                  <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
-                    Resolve
-                  </Button>
-                ) : null}
-              </div>
+              {canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
+                <div className="flex flex-wrap justify-end gap-1.5">
+                  {canNote ? (
+                    <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
+                      Note
+                    </Button>
+                  ) : null}
+                  {row.status === "active" && canAcknowledge ? (
+                    <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
+                      Acknowledge
+                    </Button>
+                  ) : null}
+                  {row.status !== "resolved" && canResolve ? (
+                    <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
+                      Resolve
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null}
             </article>
           )}
           loading={query.loading}

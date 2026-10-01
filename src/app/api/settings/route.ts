@@ -1,3 +1,4 @@
+import { hasPermission } from "@/server/auth/permissions";
 import { getSettings, setSettings } from "@/server/db/repo/core";
 import { audit, jsonError, jsonOk, parseJsonBody, unprocessable, withPermission } from "@/server/api/route";
 
@@ -5,7 +6,17 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("settings.view", async (request, ctx) => {
   try {
-    return jsonOk((await getSettings(ctx.user.organizationId)));
+    const settings = await getSettings(ctx.user.organizationId);
+    const notifications = settings.notifications;
+    if (
+      !hasPermission(ctx.user, "settings.manage") &&
+      notifications !== null &&
+      typeof notifications === "object" &&
+      !Array.isArray(notifications)
+    ) {
+      return jsonOk({ ...settings, notifications: { ...notifications, recipients: [] } });
+    }
+    return jsonOk(settings);
   } catch (error) {
     return jsonError(error as Error, request);
   }

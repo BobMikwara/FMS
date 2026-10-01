@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { getCurrentUser } from "@/server/auth/session";
 import { buildDashboard } from "@/server/services/analytics";
@@ -16,7 +17,7 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const data = (await buildDashboard(user.organizationId, "7d", user.stationIds));
+  const data = (await buildDashboard(user.organizationId, "7d", stationScopeForUser(user)));
   const { kpis, charts, alerts, recentMovements, lowTanks, deviceHealth, stations } = data;
 
   const greeting = greetingForHour(new Date().getHours());

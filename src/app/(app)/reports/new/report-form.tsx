@@ -33,11 +33,15 @@ export function ReportForm({
   defaultTo,
   stations,
   fuelTypes,
+  canExport,
+  canViewReports,
 }: {
   defaultFrom: string;
   defaultTo: string;
   stations: { id: string; name: string }[];
   fuelTypes: { id: string; name: string }[];
+  canExport: boolean;
+  canViewReports: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -127,16 +131,22 @@ export function ReportForm({
           <Notice tone="ok" title="Report ready">
             <span className="flex flex-wrap items-center gap-3">
               <span>The report has been generated from live data.</span>
-              <a className="btn btn-secondary btn-sm" href={`/api/reports/${reportId}/export?format=${form.format}`}>
-                <Download size={14} />
-                Download {form.format.toUpperCase()}
-              </a>
-              <a className="btn btn-ghost btn-sm" href={`/api/reports/${reportId}/export?format=csv`}>
-                Download CSV
-              </a>
-              <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.push("/reports")}>
-                View all reports
-              </button>
+              {canExport ? (
+                <>
+                  <a className="btn btn-secondary btn-sm" href={`/api/reports/${reportId}/export?format=${form.format}`}>
+                    <Download size={14} />
+                    Download {form.format.toUpperCase()}
+                  </a>
+                  <a className="btn btn-ghost btn-sm" href={`/api/reports/${reportId}/export?format=csv`}>
+                    Download CSV
+                  </a>
+                </>
+              ) : null}
+              {canViewReports ? (
+                <button type="button" className="btn btn-ghost btn-sm" onClick={() => router.push("/reports")}>
+                  View all reports
+                </button>
+              ) : null}
             </span>
           </Notice>
         ) : null}
@@ -283,9 +293,11 @@ export function ReportForm({
           <Button type="submit" loading={busy}>
             Generate report
           </Button>
-          <Button type="button" variant="secondary" onClick={() => router.push("/reports")}>
-            Cancel
-          </Button>
+          {canViewReports ? (
+            <Button type="button" variant="secondary" onClick={() => router.push("/reports")}>
+              Cancel
+            </Button>
+          ) : null}
         </div>
 
         <p className="text-[0.6875rem] leading-relaxed text-[var(--ink-3)]">

@@ -1,8 +1,9 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getStation } from "@/server/db/repo/stations";
 import { buildStationDetail } from "@/server/services/analytics";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { PageHeader } from "@/components/ui/layout";
 import { Badge, EmptyState } from "@/components/ui/feedback";
 import { AreaChart, BarChart, ComparisonBars, type Series } from "@/components/charts/charts";
@@ -21,10 +22,15 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
   if (
     !station ||
     station.organizationId !== user.organizationId ||
-    (user.stationIds.length > 0 && !user.stationIds.includes(stationId))
+    (!userCanAccessStation(user, stationId))
   ) notFound();
 
   const detail = (await buildStationDetail(stationId, "7d"));
+  const canViewTanks = hasPermission(user, "tanks.view");
+  const canViewReadings = hasPermission(user, "readings.view");
+  const canViewMovements = hasPermission(user, "movements.view");
+  const canViewAlerts = hasPermission(user, "alerts.view");
+  const canViewDevices = hasPermission(user, "devices.view");
 
   return (
     <div className="space-y-5">
@@ -35,13 +41,18 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <StationStatusBadge status={station.status} />
-            <a href={`/map?station=${station.id}`} className="btn btn-secondary btn-sm">
-              <Icon name="map" className="h-3.5 w-3.5" />
-              Show on map
-            </a>
-            <a href={`/stations/${station.id}/edit`} className="btn btn-secondary btn-sm">
-              Edit
-            </a>
+            {station.isArchived ? <Badge tone="neutral">Archived</Badge> : null}
+            {hasPermission(user, "map.view") ? (
+              <a href={`/map?station=${station.id}`} className="btn btn-secondary btn-sm">
+                <Icon name="map" className="h-3.5 w-3.5" />
+                Show on map
+              </a>
+            ) : null}
+            {hasPermission(user, "stations.edit") ? (
+              <a href={`/stations/${station.id}/edit`} className="btn btn-secondary btn-sm">
+                Edit
+              </a>
+            ) : null}
           </div>
         }
       />
@@ -51,127 +62,156 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
           icon="station"
           title="No data for this station"
           description="This station has no tanks or readings yet. Add tanks and connect probes to start monitoring."
-          action={
+          action={!station.isArchived && hasPermission(user, "tanks.create") ? (
             <Link href="/tanks/new" className="btn btn-primary btn-sm">
               Add tank
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Metric label="Tanks" value={String(detail.tanks.length)} hint={`${detail.fuelTypes.length} fuel types`} />
-            <Metric
-              label="Fuel on hand"
-              value={`${formatNumber(Math.round(detail.totalFuel))} L`}
-              hint={`${formatPercent(detail.utilizationPct, 1)} of ${formatNumber(Math.round(detail.capacity))} L capacity`}
-            />
-            <Metric
-              label="Fuel consumption / tank outflow (today)"
-              value={`${formatNumber(detail.todayConsumption)} L`}
-              hint="Derived from consecutive probe readings"
-            />
-            <Metric label="Refills (today)" value={`${formatNumber(detail.todayRefills)} L`} hint="Detected from level increases" />
-            <Metric
-              label="Active alerts"
-              value={String(detail.alerts.filter((alert) => alert.status === "active").length)}
-              hint={`${detail.alerts.length} total on record`}
-            />
-            <Metric
-              label="Devices reporting"
-              value={`${detail.devices.filter((device) => device.status === "online").length}/${detail.devices.length}`}
-              hint={`${detail.devices.filter((device) => device.status === "offline").length} offline`}
-            />
-            <Metric label="Outflow (7 days)" value={`${formatNumber(detail.rangeConsumption)} L`} hint="Across all tanks" />
-            <Metric label="Suspected loss (7 days)" value={`${formatNumber(detail.rangeSuspectedLoss)} L`} hint="Flagged for investigation" />
-          </section>
+          {canViewTanks || canViewMovements || canViewAlerts || canViewDevices ? (
+            <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              {canViewTanks ? (
+                <>
+                  <Metric label="Tanks" value={String(detail.tanks.length)} hint={`${detail.fuelTypes.length} fuel types`} />
+                  <Metric
+                    label="Fuel on hand"
+                    value={`${formatNumber(Math.round(detail.totalFuel))} L`}
+                    hint={`${formatPercent(detail.utilizationPct, 1)} of ${formatNumber(Math.round(detail.capacity))} L capacity`}
+                  />
+                </>
+              ) : null}
+              {canViewMovements ? (
+                <>
+                  <Metric
+                    label="Fuel consumption / tank outflow (today)"
+                    value={`${formatNumber(detail.todayConsumption)} L`}
+                    hint="Derived from consecutive probe readings"
+                  />
+                  <Metric label="Refills (today)" value={`${formatNumber(detail.todayRefills)} L`} hint="Detected from level increases" />
+                  <Metric label="Outflow (7 days)" value={`${formatNumber(detail.rangeConsumption)} L`} hint="Across all tanks" />
+                  <Metric label="Suspected loss (7 days)" value={`${formatNumber(detail.rangeSuspectedLoss)} L`} hint="Flagged for investigation" />
+                </>
+              ) : null}
+              {canViewAlerts ? (
+                <Metric
+                  label="Active alerts"
+                  value={String(detail.alerts.filter((alert) => alert.status === "active").length)}
+                  hint={`${detail.alerts.length} total on record`}
+                />
+              ) : null}
+              {canViewDevices ? (
+                <Metric
+                  label="Devices reporting"
+                  value={`${detail.devices.filter((device) => device.status === "online").length}/${detail.devices.length}`}
+                  hint={`${detail.devices.filter((device) => device.status === "offline").length} offline`}
+                />
+              ) : null}
+            </section>
+          ) : null}
 
-          <section className="grid gap-5 xl:grid-cols-2">
-            <div className="card p-5">
-              <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Fuel level trend</h2>
-              <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Average measured volume across this station's tanks.</p>
+          {canViewReadings || canViewMovements ? (
+            <section className="grid gap-5 xl:grid-cols-2">
+              {canViewReadings ? (
+                <div className="card p-5">
+                  <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Fuel level trend</h2>
+                  <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
+                    Average measured volume across this station's tanks.
+                  </p>
+                  <div className="mt-4">
+                    {detail.levelTrend.length > 1 ? (
+                      <AreaChart
+                        labels={detail.levelTrend.map((point) => point.bucket)}
+                        series={[
+                          {
+                            key: "volume",
+                            label: "Measured volume",
+                            color: "#0f766e",
+                            values: detail.levelTrend.map((point) => Math.round(point.avgVolume)),
+                          },
+                        ] satisfies Series[]}
+                        height={220}
+                        yUnit="L"
+                        ariaLabel={`Fuel level trend for ${station.name}`}
+                      />
+                    ) : (
+                      <EmptyState
+                        icon="tank"
+                        title="Not enough history yet"
+                        description="The trend appears once this station has a few days of readings."
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : null}
+              {canViewMovements ? (
+                <div className="card p-5">
+                  <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Consumption vs refills</h2>
+                  <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
+                    Daily tank outflow against recorded refills.
+                  </p>
+                  <div className="mt-4">
+                    {detail.movementTrend.length > 0 ? (
+                      <BarChart
+                        labels={detail.movementTrend.map((point) => point.bucket)}
+                        series={[
+                          {
+                            key: "consumption",
+                            label: "Tank outflow",
+                            color: "#0f766e",
+                            values: detail.movementTrend.map((point) => Math.round(point.consumption)),
+                          },
+                          {
+                            key: "refills",
+                            label: "Refills",
+                            color: "#22c55e",
+                            values: detail.movementTrend.map((point) => Math.round(point.refills)),
+                          },
+                        ]}
+                        height={220}
+                        yUnit="L"
+                        ariaLabel={`Consumption against refills for ${station.name}`}
+                      />
+                    ) : (
+                      <EmptyState
+                        icon="movement"
+                        title="No movement data yet"
+                        description="Refills and outflow appear here once readings show sustained changes."
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {canViewTanks ? (
+            <section className="card p-5">
+              <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Tank fill levels</h2>
               <div className="mt-4">
-                {detail.levelTrend.length > 1 ? (
-                  <AreaChart
-                    labels={detail.levelTrend.map((point) => point.bucket)}
-                    series={
-                      [
-                        {
-                          key: "volume",
-                          label: "Measured volume",
-                          color: "#0f766e",
-                          values: detail.levelTrend.map((point) => Math.round(point.avgVolume)),
-                        },
-                      ] satisfies Series[]
-                    }
-                    height={220}
-                    yUnit="L"
-                    ariaLabel={`Fuel level trend for ${station.name}`}
-                  />
-                ) : (
-                  <EmptyState
-                    icon="tank"
-                    title="Not enough history yet"
-                    description="The trend appears once this station has a few days of readings."
-                  />
-                )}
+                <ComparisonBars
+                  items={detail.tanks.map((tank) => ({
+                    label: `${tank.name} · ${formatNumber(Math.round(tank.currentVolume))} L`,
+                    value: Math.round(tank.currentVolume),
+                    max: Math.round(tank.capacity),
+                    meta: `${formatPercent(tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0, 0)} full`,
+                  }))}
+                  ariaLabel={`Tank fill levels at ${station.name}`}
+                />
               </div>
-            </div>
-
-            <div className="card p-5">
-              <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Consumption vs refills</h2>
-              <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Daily tank outflow against recorded refills.</p>
-              <div className="mt-4">
-                {detail.movementTrend.length > 0 ? (
-                  <BarChart
-                    labels={detail.movementTrend.map((point) => point.bucket)}
-                    series={[
-                      {
-                        key: "consumption",
-                        label: "Tank outflow",
-                        color: "#0f766e",
-                        values: detail.movementTrend.map((point) => Math.round(point.consumption)),
-                      },
-                      {
-                        key: "refills",
-                        label: "Refills",
-                        color: "#22c55e",
-                        values: detail.movementTrend.map((point) => Math.round(point.refills)),
-                      },
-                    ]}
-                    height={220}
-                    yUnit="L"
-                    ariaLabel={`Consumption against refills for ${station.name}`}
-                  />
-                ) : (
-                  <EmptyState
-                    icon="movement"
-                    title="No movement data yet"
-                    description="Refills and outflow appear here once readings show sustained changes."
-                  />
-                )}
-              </div>
-            </div>
-          </section>
-
-          <section className="card p-5">
-            <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Tank fill levels</h2>
-            <div className="mt-4">
-              <ComparisonBars
-                items={detail.tanks.map((tank) => ({
-                  label: `${tank.name} · ${formatNumber(Math.round(tank.currentVolume))} L`,
-                  value: Math.round(tank.currentVolume),
-                  max: Math.round(tank.capacity),
-                  meta: `${formatPercent(tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0, 0)} full`,
-                }))}
-                ariaLabel={`Tank fill levels at ${station.name}`}
-              />
-            </div>
-          </section>
+            </section>
+          ) : null}
         </>
       )}
 
-      <StationTanks stationId={station.id} />
+      {hasPermission(user, "tanks.view") ? (
+        <StationTanks
+          stationId={station.id}
+          canCreate={!station.isArchived && hasPermission(user, "tanks.create")}
+          includeArchived={station.isArchived}
+        />
+      ) : null}
 
       <section className="card p-5">
         <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Location</h2>
@@ -192,7 +232,7 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
         </div>
       </section>
 
-      {detail && detail.movements.length > 0 ? (
+      {canViewMovements && detail && detail.movements.length > 0 ? (
         <section className="card overflow-hidden">
           <div className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-4">
             <div>
@@ -209,7 +249,9 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
               return (
               <li key={movement.id} className="flex items-center justify-between gap-3 px-5 py-3.5">
                 <div className="min-w-0">
-                  <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{tank?.name ?? movement.tankId}</p>
+                  <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">
+                    {canViewTanks ? tank?.name ?? movement.tankId : "Tank activity"}
+                  </p>
                   <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
                     {timeAgo(movement.ts)} · {formatDateTime(movement.ts)}
                   </p>

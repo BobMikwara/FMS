@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, Clock, Mail, Play, Pause, Trash2 } from "lucide-react";
+import { CalendarClock, Clock, Mail, Play, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Switch, Textarea } from "@/components/ui/form";
 import { Badge } from "@/components/ui/feedback";
@@ -196,11 +196,11 @@ export function ScheduledReportsBrowser({
       const response = await fetch(`/api/scheduled-reports/${row.id}`, { method: "DELETE" });
       const payload = await response.json();
       if (payload.ok) {
-        setRows((current) => current.filter((entry) => entry.id !== row.id));
-        toast.success("Schedule deleted", row.name);
+        setRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, isEnabled: false } : entry));
+        toast.success("Schedule paused", row.name);
         setDeleteId(null);
       } else {
-        toast.error(payload.error?.message ?? "Could not delete the schedule.");
+        toast.error(payload.error?.message ?? "Could not pause the schedule.");
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -284,8 +284,8 @@ export function ScheduledReportsBrowser({
                     Edit
                   </Button>
                   <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-                    <Trash2 size={14} />
-                    Delete
+                    <Pause size={14} />
+                    Pause
                   </Button>
                 </div>
               </div>
@@ -444,9 +444,9 @@ export function ScheduledReportsBrowser({
         open={Boolean(target)}
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
-        title="Delete this schedule?"
+        title="Pause this schedule?"
         message={`${target?.name ?? "This schedule"} will stop generating reports. Reports it already produced are kept.`}
-        confirmLabel="Delete schedule"
+        confirmLabel="Pause schedule"
         loading={busy}
       />
     </div>

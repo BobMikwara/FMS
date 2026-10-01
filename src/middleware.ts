@@ -46,7 +46,9 @@ export async function middleware(request: Request) {
     return response;
   }
 
-  return NextResponse.next();
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-smartfuel-path", pathname);
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 async function verify(token: string): Promise<boolean> {

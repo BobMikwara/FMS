@@ -41,6 +41,8 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
   });
 
   const roleId = form.roleId || defaultRole?.id || "";
+  const selectedRole = roles.find((role) => role.id === roleId);
+  const organizationWideRole = selectedRole?.key === "admin" || selectedRole?.key === "super_admin" || selectedRole?.key === "owner";
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -132,7 +134,14 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
           <Select
             id="invite-role"
             value={roleId}
-            onChange={(event) => setForm({ ...form, roleId: event.target.value })}
+            onChange={(event) => {
+              const nextRole = roles.find((role) => role.id === event.target.value);
+              setForm({
+                ...form,
+                roleId: event.target.value,
+                stationIds: nextRole && ["admin", "super_admin", "owner"].includes(nextRole.key) ? [] : form.stationIds,
+              });
+            }}
             options={roles.map((role) => ({ value: role.id, label: role.name }))}
           />
         </Field>
@@ -155,30 +164,37 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
 
       <div>
         <p className="mb-2 text-[0.8125rem] font-medium text-[var(--ink)]">Station access</p>
-        <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
-          Leave every station unselected to grant access to the whole organization. Managers and operators should be scoped
-          to the sites they run.
-        </p>
-        <div className="grid max-h-52 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2">
-          {stations.map((station) => (
-            <label key={station.id} className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-[var(--line-strong)]"
-                checked={form.stationIds.includes(station.id)}
-                onChange={() =>
-                  setForm((current) => ({
-                    ...current,
-                    stationIds: current.stationIds.includes(station.id)
-                      ? current.stationIds.filter((id) => id !== station.id)
-                      : [...current.stationIds, station.id],
-                  }))
-                }
-              />
-              <span className="truncate">{station.name}</span>
-            </label>
-          ))}
-        </div>
+        {organizationWideRole ? (
+          <p className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">
+            This administrator role has organization-wide station access. Other roles must be assigned to at least one station.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
+              Select the stations this user may access. Non-administrator accounts need at least one station assignment.
+            </p>
+            <div className="grid max-h-52 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2">
+              {stations.map((station) => (
+                <label key={station.id} className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-[var(--line-strong)]"
+                    checked={form.stationIds.includes(station.id)}
+                    onChange={() =>
+                      setForm((current) => ({
+                        ...current,
+                        stationIds: current.stationIds.includes(station.id)
+                          ? current.stationIds.filter((id) => id !== station.id)
+                          : [...current.stationIds, station.id],
+                      }))
+                    }
+                  />
+                  <span className="truncate">{station.name}</span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
       </div>
 
       <Switch

@@ -19,7 +19,7 @@ interface ReportRow {
   period: string;
   dateFrom: string;
   dateTo: string;
-  status: "queued" | "generating" | "ready" | "failed";
+  status: "queued" | "generating" | "ready" | "failed" | "archived";
   format: string;
   fileUrl: string | null;
   createdAt: string;
@@ -42,9 +42,18 @@ const STATUS_TONE: Record<string, "ok" | "warn" | "crit" | "neutral"> = {
   generating: "warn",
   queued: "neutral",
   failed: "crit",
+  archived: "neutral",
 };
 
-export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
+export function ReportsBrowser({
+  initialRows,
+  canCreate,
+  canExport,
+}: {
+  initialRows: ReportRow[];
+  canCreate: boolean;
+  canExport: boolean;
+}) {
   const query = useResourceQuery<ReportRow>({
     endpoint: "/api/reports",
     initial: { rows: initialRows, total: initialRows.length, page: 1, pageSize: 20 },
@@ -61,14 +70,21 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
     if (!target) return;
     setBusy(true);
     try {
-      const response = await fetch(`/api/reports/${target.id}`, { method: "DELETE" });
+      const restoring = target.status === "archived";
+      const response = await fetch(`/api/reports/${target.id}`, {
+        method: restoring ? "PATCH" : "DELETE",
+        ...(restoring ? {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ status: "ready" }),
+        } : {}),
+      });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("Report deleted", target.title);
+        toast.success(restoring ? "Report restored" : "Report archived", target.title);
         setDeleteId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not delete the report.");
+        toast.error(payload.error?.message ?? (restoring ? "Could not restore the report." : "Could not archive the report."));
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -118,7 +134,7 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
         header: "File",
         hideOnMobile: true,
         cell: (row) =>
-          row.fileUrl ? (
+          canExport && row.fileUrl ? (
             <a className="link text-[0.75rem]" href={row.fileUrl} download>
               Download {row.format.toUpperCase()}
             </a>
@@ -129,16 +145,16 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
       {
         key: "actions",
         header: "",
-        cell: (row) => (
+        cell: (row) => canCreate ? (
           <div className="flex items-center justify-end gap-1">
             <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-              Delete
+              {row.status === "archived" ? "Restore" : "Archive"}
             </Button>
           </div>
-        ),
+        ) : null,
       },
     ],
-    [],
+    [canCreate, canExport],
   );
 
   return (
@@ -146,6 +162,16 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
       {query.error ? <LoadError message={query.error} onRetry={query.refresh} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label="Report lifecycle"
+          className="w-44"
+          value={query.filters.archived ?? ""}
+          onChange={(event) => query.setFilter("archived", event.target.value)}
+          options={[
+            { value: "", label: "Current reports" },
+            { value: "true", label: "Archived reports" },
+          ]}
+        />
         <Select
           aria-label="Filter by category"
           className="w-44"
@@ -157,9 +183,11 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
           ]}
         />
         <div className="flex-1" />
-        <Link href="/reports/new" className="btn btn-primary btn-sm">
-          Generate report
-        </Link>
+        {canCreate ? (
+          <Link href="/reports/new" className="btn btn-primary btn-sm">
+            Generate report
+          </Link>
+        ) : null}
       </div>
 
       <DataTable
@@ -176,20 +204,20 @@ export function ReportsBrowser({ initialRows }: { initialRows: ReportRow[] }) {
         searchPlaceholder="Search reports by title or author…"
         emptyTitle="No reports have been generated yet"
         emptyDescription="Generate your first report to summarise a period of fuel activity."
-        emptyAction={
+        emptyAction={canCreate ? (
           <Link href="/reports/new" className="btn btn-primary btn-sm">
             Generate report
           </Link>
-        }
+        ) : undefined}
       />
 
       <ConfirmDialog
         open={Boolean(target)}
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
-        title="Delete this report?"
-        message={`${target?.title ?? "This report"} will be removed. Scheduled deliveries of the same definition are unaffected.`}
-        confirmLabel="Delete report"
+        title={target?.status === "archived" ? "Restore this report?" : "Archive this report?"}
+        message={target?.status === "archived" ? `${target.title} will return to the current reports list.` : `${target?.title ?? "This report"} will be hidden from the current list. The report record and file reference will be retained.`}
+        confirmLabel={target?.status === "archived" ? "Restore report" : "Archive report"}
         loading={busy}
       />
     </div>

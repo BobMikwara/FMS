@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import { createReport, listReports } from "@/server/db/repo/reports";
 import { listAllStations } from "@/server/db/repo/stations";
 import { isoDaysAgo } from "@/lib/utils";
@@ -14,6 +15,7 @@ import {
   str,
   withPermission,
 } from "@/server/api/route";
+import { hasPermission } from "@/server/auth/permissions";
 
 export const dynamic = "force-dynamic";
 
@@ -28,9 +30,13 @@ export const GET = withPermission("reports.view", async (request, ctx) => {
       search: params.get("search") ?? undefined,
       page,
       pageSize,
-      stationIds: ctx.user.stationIds,
+      stationIds: stationScopeForUser(ctx.user),
+      archivedOnly: params.get("archived") === "true",
     }));
-    return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
+    const rows = hasPermission(ctx.user, "reports.export")
+      ? result.rows
+      : result.rows.map((report) => ({ ...report, fileUrl: null }));
+    return jsonOk({ rows, total: result.total, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
   }
@@ -54,9 +60,11 @@ export const POST = withPermission("reports.create", async (request, ctx) => {
     if (stationId) {
       const station = (await listAllStations(ctx.user.organizationId)).find((entry) => entry.id === stationId);
       if (!station) throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
-      if (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(stationId)) {
+      if (!userCanAccessStation(ctx.user, stationId)) {
         throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
       }
+    } else if (stationScopeForUser(ctx.user) !== undefined) {
+      throw new ApiError(403, "A station must be selected for a station-scoped report.", "forbidden");
     }
     const report = (await createReport({
       organizationId: ctx.user.organizationId,

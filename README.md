@@ -45,7 +45,7 @@ GPS/telematics path that shares the same authentication and normalization layer.
 ```bash
 npm install
 cp .env.example .env          # then edit the values
-npm run db:seed               # creates db/smartfuel.db with demo data
+npm run db:seed               # seeds demo data into an empty local SQLite database; refuses existing rows
 npm run dev                   # http://localhost:3000
 ```
 
@@ -83,11 +83,11 @@ and connect a real probe to switch to live hardware — nothing else changes.
 | `npm run build` | Production build |
 | `npm start` | Serve the production build |
 | `npm run typecheck` | TypeScript, no emit |
-| `npm run db:seed` | (Re)create the schema and seed demo data |
+| `npm run db:seed` | Seed demo data into an empty local SQLite database; refuses populated databases and never resets them |
 | `npm run db:setup` | Create the local SQLite schema, or apply pending PostgreSQL migrations |
 | `npm run db:migrate` | Apply versioned `supabase/migrations/*.sql` to PostgreSQL |
-| `npm run db:seed:postgres` | Idempotently bootstrap one Supabase organization, admin, station and tank |
-| `npm run db:reset` | Drop and recreate the local SQLite schema (never resets PostgreSQL) |
+| `npm run db:seed:postgres` | Additively bootstrap one PostgreSQL organization and administrator; requires an explicit bootstrap flag and configured secrets, and preserves existing account passwords and device keys |
+| `npm run db:reset` | Destructive local SQLite reset only when `CONFIRM_LOCAL_SQLITE_RESET=YES` is set; PostgreSQL reset is refused |
 
 ---
 
@@ -185,8 +185,8 @@ src/
 db/schema.sql               canonical PostgreSQL schema source
 db/schema.sqlite.sql        local SQLite development schema
 supabase/migrations/        versioned PostgreSQL migrations
-scripts/seed.mjs            local demo data generator
-scripts/seed-postgres.mjs   minimal production bootstrap seed
+scripts/seed.mjs            local demo data generator; refuses non-empty SQLite databases
+scripts/seed-postgres.mjs   additive, conflict-checked PostgreSQL bootstrap
 ```
 
 ### API

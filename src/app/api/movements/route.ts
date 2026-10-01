@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import { listEvents, movementTotals } from "@/server/db/repo/events";
 import { isoDaysAgo } from "@/lib/utils";
 import { jsonError, jsonOk, parsePagination, withPermission } from "@/server/api/route";
@@ -21,7 +22,7 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
       to,
       page,
       pageSize,
-      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      stationIds: stationScopeForUser(ctx.user),
     }));
     const totals = (await movementTotals(
       ctx.user.organizationId,
@@ -29,7 +30,7 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
       to,
       stationId,
       undefined,
-      ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      stationScopeForUser(ctx.user),
     ));
     return jsonOk({
       rows: result.rows,

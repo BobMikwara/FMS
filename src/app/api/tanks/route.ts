@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import { createTank, getStation, listFuelTypes, listTanks } from "@/server/db/repo/stations";
 import {
   ApiError,
@@ -31,8 +32,9 @@ export const GET = withPermission("tanks.view", async (request, ctx) => {
       order: (params.get("order") as "asc" | "desc") ?? "asc",
       page,
       pageSize,
-      includeArchived: params.get("archived") === "true",
-      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      includeArchived: params.get("includeArchived") === "true" || params.get("archived") === "true",
+      archivedOnly: params.get("archived") === "true",
+      stationIds: stationScopeForUser(ctx.user),
     }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
@@ -54,13 +56,13 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
       throw new ApiError(422, "Tank capacity looks implausibly large. Please check the value.", "validation_error");
     }
     const station = await getStation(stationId);
-    if (!station || station.organizationId !== ctx.user.organizationId) {
-      throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
+    if (!station || station.organizationId !== ctx.user.organizationId || station.isArchived) {
+      throw new ApiError(422, "Select an active station in your organization.", "validation_error");
     }
-    if (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(stationId)) {
+    if (!userCanAccessStation(ctx.user, stationId)) {
       throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
     }
-    const fuelTypes = (await listFuelTypes(ctx.user.organizationId));
+    const fuelTypes = (await listFuelTypes(ctx.user.organizationId, true));
     const requestedFuelTypeId = str(body.fuelTypeId);
     if (requestedFuelTypeId && !fuelTypes.some((fuelType) => fuelType.id === requestedFuelTypeId)) {
       throw new ApiError(422, "The selected fuel type does not exist in your organization.", "validation_error");

@@ -1,3 +1,4 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { getTank } from "@/server/db/repo/stations";
 import { listEvents } from "@/server/db/repo/events";
 import { isoDaysAgo } from "@/lib/utils";
@@ -12,7 +13,7 @@ export const GET = withPermission("movements.view", async (request, ctx) => {
     if (
       !tank ||
       tank.organizationId !== ctx.user.organizationId ||
-      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+      !userCanAccessStation(ctx.user, tank.stationId)
     ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;

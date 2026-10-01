@@ -1,12 +1,16 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import type { Device } from "@/server/domain/types";
 import { randomBytes } from "node:crypto";
-import { createDevice, listDevices } from "@/server/db/repo/devices";
+import { createDevice, hasActiveFuelProbe, listDevices } from "@/server/db/repo/devices";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
 import { listAllVehicles } from "@/server/db/repo/devices";
 import { ApiError, audit, jsonCreated, jsonError, jsonOk, maxLen, parseJsonBody, parsePagination, required, str, withPermission,
   uniqueViolation,
 } from "@/server/api/route";
 import { hashDeviceKey } from "@/server/auth/session";
+import { publicDevice } from "@/server/services/device-response";
+import { transaction } from "@/server/db/client";
+import { lockTankForUpdate } from "@/server/db/repo/stations";
 
 /** Generates a per-device ingest key. Returned to the caller exactly once. */
 function newDeviceApiKey(): string {
@@ -23,6 +27,7 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
       orgId: ctx.user.organizationId,
       type: params.get("type") ?? undefined,
       status: params.get("status") ?? undefined,
+      isActive: params.get("active") == null ? undefined : params.get("active") === "true",
       reporting: (params.get("reporting") as "ok" | "problem" | null) ?? undefined,
       stationId: params.get("stationId") ?? undefined,
       tankId: params.get("tankId") ?? undefined,
@@ -33,7 +38,7 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
       order: (params.get("order") as "asc" | "desc") ?? "asc",
       page,
       pageSize,
-      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      stationIds: stationScopeForUser(ctx.user),
     }));
     const stations = (await listAllStations(ctx.user.organizationId));
     const tanks = (await listAllTanks(ctx.user.organizationId));
@@ -42,7 +47,7 @@ export const GET = withPermission("devices.view", async (request, ctx) => {
     const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
     const vehicleName = new Map(vehicles.map((vehicle) => [vehicle.id, `${vehicle.name} (${vehicle.plateNumber})`]));
     const rows = result.rows.map((device) => ({
-      ...device,
+      ...publicDevice(device),
       stationName: device.stationId ? (stationName.get(device.stationId) ?? null) : null,
       tankName: device.tankId ? (tankName.get(device.tankId) ?? null) : null,
       vehicleName: device.vehicleId ? (vehicleName.get(device.vehicleId) ?? null) : null,
@@ -57,7 +62,11 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
   try {
     const body = await parseJsonBody<Record<string, unknown>>(request);
     const serialNumber = maxLen(required(body.serialNumber, "Serial number"), 64, "Serial number");
-    const type = str(body.type, "fuel_probe") as "fuel_probe" | "gps_tracker";
+    const typeValue = str(body.type, "fuel_probe");
+    if (typeValue !== "fuel_probe" && typeValue !== "gps_tracker") {
+      throw new ApiError(422, "Select a supported device type.", "validation_error");
+    }
+    const type = typeValue as "fuel_probe" | "gps_tracker";
     const orgId = ctx.user.organizationId;
     const stations = await listAllStations(orgId);
     const tanks = await listAllTanks(orgId);
@@ -68,7 +77,7 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
     if (stationId && !stations.some((station) => station.id === stationId)) {
       throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
     }
-    if (stationId && ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(stationId)) {
+    if (stationId && !userCanAccessStation(ctx.user, stationId)) {
       throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
     }
     if (tankId && !tanks.some((tank) => tank.id === tankId)) {
@@ -77,28 +86,23 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
     if (vehicleId && !vehicles.some((vehicle) => vehicle.id === vehicleId)) {
       throw new ApiError(422, "The selected vehicle does not exist in your organization.", "validation_error");
     }
-    if (ctx.user.stationIds.length > 0 && tankId) {
-      const tank = tanks.find((candidate) => candidate.id === tankId);
-      if (!tank || !ctx.user.stationIds.includes(tank.stationId)) {
-        throw new ApiError(403, "You are not scoped to the selected tank's station.", "forbidden");
-      }
+    const tank = tankId ? tanks.find((candidate) => candidate.id === tankId) : null;
+    const vehicle = vehicleId ? vehicles.find((candidate) => candidate.id === vehicleId) : null;
+    if (tankId && (!tank || !userCanAccessStation(ctx.user, tank.stationId))) {
+      throw new ApiError(403, "You are not scoped to the selected tank's station.", "forbidden");
     }
-    if (ctx.user.stationIds.length > 0 && vehicleId) {
-      const vehicle = vehicles.find((candidate) => candidate.id === vehicleId);
-      if (!vehicle || !vehicle.stationId || !ctx.user.stationIds.includes(vehicle.stationId)) {
-        throw new ApiError(403, "You are not scoped to the selected vehicle's station.", "forbidden");
-      }
+    if (vehicleId && (!vehicle || !vehicle.stationId || !userCanAccessStation(ctx.user, vehicle.stationId))) {
+      throw new ApiError(403, "You are not scoped to the selected vehicle's station.", "forbidden");
+    }
+    const assignedStationIds = [stationId || null, tank?.stationId ?? null, vehicle?.stationId ?? null]
+      .filter((selectedId): selectedId is string => Boolean(selectedId));
+    if (new Set(assignedStationIds).size > 1) {
+      throw new ApiError(422, "The device and its assigned asset must belong to the same station.", "validation_error");
     }
 
     if (type === "fuel_probe") {
       if (!tankId) {
         throw new ApiError(422, "A fuel probe must be assigned to a tank.", "validation_error");
-      }
-      const tank = tanks.find((row) => row.id === tankId);
-      if (!tank) throw new ApiError(422, "The selected tank does not exist.", "validation_error");
-      const devices = (await listDevices({ orgId, tankId, pageSize: 100 })).rows;
-      if (devices.some((device) => device.type === "fuel_probe")) {
-        throw new ApiError(409, `${tank.name} already has a fuel probe assigned.`, "conflict");
       }
     } else {
       const vehicleId = str(body.vehicleId);
@@ -112,19 +116,30 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
   const apiKey = newDeviceApiKey();
   let device!: Device;
   try {
-    device = (await createDevice({
-      organizationId: orgId,
-      type,
-      serialNumber,
-      label: str(body.label) || null,
-      provider: str(body.provider, "tectonic"),
-      model: str(body.model) || null,
-      firmware: str(body.firmware) || null,
-      stationId: str(body.stationId) || null,
-      tankId: str(body.tankId) || null,
-      vehicleId: str(body.vehicleId) || null,
-      apiKeyHash: hashDeviceKey(apiKey),
-    }));
+    device = await transaction(async () => {
+      if (type === "fuel_probe" && tankId) {
+        const lockedTank = await lockTankForUpdate(tankId);
+        if (!lockedTank || lockedTank.organizationId !== orgId || lockedTank.isArchived) {
+          throw new ApiError(422, "Select an active tank in your organization.", "validation_error");
+        }
+        if (await hasActiveFuelProbe(tankId)) {
+          throw new ApiError(409, `${lockedTank.name} already has an active fuel probe assigned.`, "conflict");
+        }
+      }
+      return createDevice({
+        organizationId: orgId,
+        type,
+        serialNumber,
+        label: str(body.label) || null,
+        provider: str(body.provider, "tectonic"),
+        model: str(body.model) || null,
+        firmware: str(body.firmware) || null,
+        stationId: str(body.stationId) || null,
+        tankId: str(body.tankId) || null,
+        vehicleId: str(body.vehicleId) || null,
+        apiKeyHash: hashDeviceKey(apiKey),
+      });
+    });
   } catch (error) {
     uniqueViolation(error, "A device with this serial number", "serial number");
   }
@@ -135,10 +150,10 @@ export const POST = withPermission("devices.create", async (request, ctx) => {
       entityId: device.id,
       entityLabel: device.serialNumber,
       summary: `${ctx.user.name} registered device ${device.serialNumber}`,
-      next: device,
+      next: publicDevice(device),
       request,
     }));
-    return jsonCreated({ ...device, apiKey });
+    return jsonCreated({ ...publicDevice(device), apiKey });
   } catch (error) {
     return jsonError(error as Error, request);
   }

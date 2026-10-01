@@ -38,11 +38,19 @@ export function UsersBrowser({
   roles,
   stations,
   currentUserId,
+  canCreate,
+  canEdit,
+  canDelete,
+  canManageOrganizationWideAccess,
 }: {
   initialRows: UserRow[];
   roles: RoleOption[];
   stations: { id: string; name: string }[];
   currentUserId: string;
+  canCreate: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
+  canManageOrganizationWideAccess: boolean;
 }) {
   const query = useResourceQuery<UserRow>({
     endpoint: "/api/users",
@@ -65,6 +73,11 @@ export function UsersBrowser({
 
   const rows = query.rows as UserRow[];
   const target = rows.find((row) => row.id === deleteId) ?? null;
+  const selectedRole = roles.find((role) => role.id === form.roleId);
+  const organizationWideRole = selectedRole?.key === "admin" || selectedRole?.key === "super_admin" || selectedRole?.key === "owner";
+  const canEditTargetAccess = Boolean(
+    editTarget && (editTarget.id !== currentUserId || canManageOrganizationWideAccess),
+  );
 
   const openEdit = (user: UserRow) => {
     // Station names come from the server; map them back to ids for the form.
@@ -120,11 +133,11 @@ export function UsersBrowser({
       const response = await fetch(`/api/users/${target.id}`, { method: "DELETE" });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("User deleted", target.email);
+        toast.success("User suspended", target.email);
         setDeleteId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not delete the user.");
+        toast.error(payload.error?.message ?? "Could not suspend the user.");
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -158,8 +171,10 @@ export function UsersBrowser({
         header: "Stations",
         hideOnMobile: true,
         cell: (row) =>
-          row.stationNames.length === 0 ? (
+          ["admin", "super_admin", "owner"].includes(row.roleKey) ? (
             <span className="text-[0.75rem] text-[var(--ink-3)]">All stations</span>
+          ) : row.stationNames.length === 0 ? (
+            <span className="text-[0.75rem] text-[var(--ink-3)]">None assigned</span>
           ) : (
             <span className="text-[0.75rem] text-[var(--ink-2)]">{row.stationNames.length} assigned</span>
           ),
@@ -198,22 +213,24 @@ export function UsersBrowser({
       {
         key: "actions",
         header: "",
-        cell: (row) => (
+        cell: (row) => canEdit || (canDelete && row.id !== currentUserId) ? (
           <div className="flex items-center justify-end gap-1">
-            <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
-              Edit
-            </Button>
-            {row.id !== currentUserId ? (
+            {canEdit ? (
+              <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
+                Edit
+              </Button>
+            ) : null}
+            {canDelete && row.id !== currentUserId ? (
               <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-                Delete
+                Suspend
               </Button>
             ) : null}
           </div>
-        ),
+        ) : null,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUserId],
+    [canDelete, canEdit, currentUserId],
   );
 
   return (
@@ -264,11 +281,11 @@ export function UsersBrowser({
           icon="users"
           title="No users found"
           description="Invite a colleague to give them access to this organization."
-          action={
+          action={canCreate ? (
             <Link href="/admin/users/new" className="btn btn-primary btn-sm">
               Invite user
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -285,11 +302,11 @@ export function UsersBrowser({
           searchPlaceholder="Search users by name, email or role…"
           emptyTitle="No users found"
           emptyDescription="Invite a colleague to get started."
-          emptyAction={
+          emptyAction={canCreate ? (
             <Link href="/admin/users/new" className="btn btn-primary btn-sm">
               Invite user
             </Link>
-          }
+          ) : undefined}
         />
       )}
 
@@ -328,13 +345,22 @@ export function UsersBrowser({
             <Select
               id="user-role"
               value={form.roleId}
-              onChange={(event) => setForm({ ...form, roleId: event.target.value })}
+              disabled={!canEditTargetAccess}
+              onChange={(event) => {
+                const nextRole = roles.find((role) => role.id === event.target.value);
+                setForm({
+                  ...form,
+                  roleId: event.target.value,
+                  stationIds: nextRole && ["admin", "super_admin", "owner"].includes(nextRole.key) ? [] : form.stationIds,
+                });
+              }}
               options={roles.map((role) => ({ value: role.id, label: role.name }))}
             />
           </Field>
           <Field label="Status" htmlFor="user-status" required>
             <Select
               id="user-status"
+              disabled={editTarget?.id === currentUserId}
               value={form.status}
               onChange={(event) => setForm({ ...form, status: event.target.value })}
               options={[
@@ -346,33 +372,44 @@ export function UsersBrowser({
           </Field>
           <div className="sm:col-span-2">
             <p className="mb-2 text-[0.8125rem] font-medium text-[var(--ink)]">Station access</p>
-            <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
-              Leave every station unselected to grant access to the whole organization. Managers and operators should be
-              scoped to the sites they run.
-            </p>
-            <div className="grid max-h-48 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2">
-              {stations.map((station) => (
-                <label
-                  key={station.id}
-                  className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]"
+            {organizationWideRole ? (
+              <p className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">
+                This administrator role has organization-wide station access. Station assignments do not restrict it.
+              </p>
+            ) : (
+              <>
+                <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
+                  Select at least one station for this account. Non-administrator accounts do not receive organization-wide access.
+                  {editTarget?.id === currentUserId ? " You cannot change your own role or station assignments." : ""}
+                </p>
+                <fieldset
+                  disabled={!canEditTargetAccess}
+                  className="grid max-h-48 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2"
                 >
-                  <input
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-[var(--line-strong)]"
-                    checked={form.stationIds.includes(station.id)}
-                    onChange={() =>
-                      setForm((current) => ({
-                        ...current,
-                        stationIds: current.stationIds.includes(station.id)
-                          ? current.stationIds.filter((id) => id !== station.id)
-                          : [...current.stationIds, station.id],
-                      }))
-                    }
-                  />
-                  <span className="truncate">{station.name}</span>
-                </label>
-              ))}
-            </div>
+                  {stations.map((station) => (
+                    <label
+                      key={station.id}
+                      className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]"
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-[var(--line-strong)]"
+                        checked={form.stationIds.includes(station.id)}
+                        onChange={() =>
+                          setForm((current) => ({
+                            ...current,
+                            stationIds: current.stationIds.includes(station.id)
+                              ? current.stationIds.filter((id) => id !== station.id)
+                              : [...current.stationIds, station.id],
+                          }))
+                        }
+                      />
+                      <span className="truncate">{station.name}</span>
+                    </label>
+                  ))}
+                </fieldset>
+              </>
+            )}
           </div>
           <div className="sm:col-span-2">
             <Switch
@@ -389,9 +426,9 @@ export function UsersBrowser({
         open={Boolean(target)}
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
-        title="Delete this user?"
-        message={`${target?.email ?? "This user"} will lose access immediately. Their audit history is preserved.`}
-        confirmLabel="Delete user"
+        title="Suspend this user?"
+        message={`${target?.email ?? "This user"} will lose access immediately. Their account and audit history will be retained.`}
+        confirmLabel="Suspend user"
         loading={busy}
       />
     </div>

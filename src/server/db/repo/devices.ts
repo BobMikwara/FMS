@@ -1,4 +1,4 @@
-import { execute, id, intToBool, query, queryOne, toIso } from "../client";
+import { execute, id, intToBool, isPostgres, query, queryOne, toIso } from "../client";
 import { parseJson, snake } from "./core";
 import type { Device, Vehicle } from "../../domain/types";
 
@@ -10,6 +10,7 @@ export interface DeviceFilter {
   orgId: string;
   type?: string;
   status?: string;
+  isActive?: boolean;
   /**
    * "ok" = the device is reporting; "problem" = offline, faulted or has never
    * connected. Kept separate from `status` so a caller can ask "which devices
@@ -31,10 +32,30 @@ export interface DeviceFilter {
 export async function listDevices(filter: DeviceFilter): Promise<{ rows: Device[]; total: number }> {
   const where: string[] = ["d.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    const stationPlaceholders = filter.stationIds.map(() => "?").join(", ");
-    where.push(`(d.station_id IN (${stationPlaceholders}) OR d.tank_id IN (SELECT id FROM tanks WHERE station_id IN (${stationPlaceholders})) OR d.vehicle_id IN (SELECT id FROM vehicles WHERE station_id IN (${stationPlaceholders})))`);
-    params.push(...filter.stationIds, ...filter.stationIds, ...filter.stationIds);
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) {
+      where.push("1 = 0");
+    } else {
+      const stationPlaceholders = filter.stationIds.map(() => "?").join(", ");
+      where.push(`(
+        (d.station_id IS NULL OR d.station_id IN (${stationPlaceholders}))
+        AND (d.tank_id IS NULL OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (${stationPlaceholders})))
+        AND (d.vehicle_id IS NULL OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (${stationPlaceholders})))
+        AND (
+          d.station_id IN (${stationPlaceholders})
+          OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (${stationPlaceholders}))
+          OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (${stationPlaceholders}))
+        )
+      )`);
+      params.push(
+        ...filter.stationIds,
+        filter.orgId, ...filter.stationIds,
+        filter.orgId, ...filter.stationIds,
+        ...filter.stationIds,
+        filter.orgId, ...filter.stationIds,
+        filter.orgId, ...filter.stationIds,
+      );
+    }
   }
   if (filter.type) {
     where.push("d.type = ?");
@@ -43,6 +64,10 @@ export async function listDevices(filter: DeviceFilter): Promise<{ rows: Device[
   if (filter.status) {
     where.push("d.status = ?");
     params.push(filter.status);
+  }
+  if (filter.isActive !== undefined) {
+    where.push("d.is_active = ?");
+    params.push(filter.isActive ? 1 : 0);
   }
   if (filter.reporting === "ok") {
     where.push("d.status NOT IN ('offline', 'fault', 'never_connected')");
@@ -99,9 +124,25 @@ export async function listAllDevices(orgId: string): Promise<Device[]> {
   )).map(mapDevice);
 }
 
+export async function hasActiveFuelProbe(tankId: string, exceptDeviceId?: string): Promise<boolean> {
+  const row = await queryOne<{ id: string }>(
+    `SELECT id FROM devices
+     WHERE tank_id = ? AND type = 'fuel_probe' AND is_active = 1${exceptDeviceId ? " AND id <> ?" : ""}
+     LIMIT 1`,
+    exceptDeviceId ? [tankId, exceptDeviceId] : [tankId],
+  );
+  return Boolean(row);
+}
+
 export async function getDevice(deviceId: string): Promise<Device | null> {
   const row = (await queryOne<Record<string, unknown>>("SELECT * FROM devices WHERE id = ?", [deviceId]));
   return row ? mapDevice(row) : null;
+}
+
+/** Lock one device while a transactional health sweep creates its transition alert. */
+export async function lockDeviceForUpdate(deviceId: string): Promise<void> {
+  const lockClause = isPostgres() ? " FOR UPDATE" : "";
+  await queryOne(`SELECT id FROM devices WHERE id = ?${lockClause}`, [deviceId]);
 }
 
 /**
@@ -174,8 +215,8 @@ export async function updateDevice(deviceId: string, patch: Record<string, unkno
   return (await getDevice(deviceId));
 }
 
-export async function deleteDevice(deviceId: string): Promise<void> {
-  (await execute("DELETE FROM devices WHERE id = ?", [deviceId]));
+export async function retireDevice(deviceId: string): Promise<Device | null> {
+  return (await updateDevice(deviceId, { isActive: false, status: "offline" }));
 }
 
 export async function countDevices(orgId: string, type?: string): Promise<number> {
@@ -230,16 +271,24 @@ export interface VehicleFilter {
   page?: number;
   pageSize?: number;
   includeArchived?: boolean;
+  archivedOnly?: boolean;
   stationIds?: string[];
 }
 
 export async function listVehicles(filter: VehicleFilter): Promise<{ rows: Vehicle[]; total: number }> {
   const where: string[] = ["v.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (!filter.includeArchived) where.push("v.is_archived = 0");
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`v.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.archivedOnly) where.push("v.is_archived = 1");
+  else if (!filter.includeArchived) {
+    where.push("v.is_archived = 0");
+    where.push("(v.station_id IS NULL OR s.is_archived = 0)");
+  }
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`v.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.status) {
     where.push("v.status = ?");
@@ -269,19 +318,21 @@ export async function listVehicles(filter: VehicleFilter): Promise<{ rows: Vehic
   const sortColumn = sortMap[filter.sort ?? "name"] ?? "v.name";
   const direction = filter.order === "desc" ? "DESC" : "ASC";
 
-  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM vehicles v ${clause}`, params))?.n ?? 0);
+  const total = Number((await queryOne<{ n: number }>(`SELECT count(*) AS n FROM vehicles v LEFT JOIN stations s ON s.id = v.station_id ${clause}`, params))?.n ?? 0);
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(1, filter.pageSize ?? 24));
   const rows = (await query<Record<string, unknown>>(
-    `SELECT v.* FROM vehicles v ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
+    `SELECT v.* FROM vehicles v LEFT JOIN stations s ON s.id = v.station_id ${clause} ORDER BY ${sortColumn} ${direction} LIMIT ? OFFSET ?`,
     [...params, pageSize, (page - 1) * pageSize],
   ));
   return { rows: rows.map(mapVehicle), total };
 }
 
-export async function listAllVehicles(orgId: string): Promise<Vehicle[]> {
+export async function listAllVehicles(orgId: string, includeArchived = false): Promise<Vehicle[]> {
   return (await query<Record<string, unknown>>(
-    "SELECT * FROM vehicles WHERE organization_id = ? AND is_archived = 0 ORDER BY name",
+    `SELECT v.* FROM vehicles v LEFT JOIN stations s ON s.id = v.station_id
+     WHERE v.organization_id = ?${includeArchived ? "" : " AND v.is_archived = 0 AND (v.station_id IS NULL OR s.is_archived = 0)"}
+     ORDER BY v.name`,
     [orgId],
   )).map(mapVehicle);
 }
@@ -349,8 +400,8 @@ export async function updateVehicle(vehicleId: string, patch: Record<string, unk
   return (await getVehicle(vehicleId));
 }
 
-export async function deleteVehicle(vehicleId: string): Promise<void> {
-  (await execute("DELETE FROM vehicles WHERE id = ?", [vehicleId]));
+export async function archiveVehicle(vehicleId: string): Promise<Vehicle | null> {
+  return (await updateVehicle(vehicleId, { isArchived: true }));
 }
 
 function mapVehicle(row: Record<string, unknown>): Vehicle {

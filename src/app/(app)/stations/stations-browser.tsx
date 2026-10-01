@@ -21,23 +21,40 @@ interface StationRow {
   country: string;
   address: string;
   status: "online" | "warning" | "critical" | "offline";
+  isArchived: boolean;
   latitude: number;
   longitude: number;
   openingTime: string;
   closingTime: string;
-  tankCount: number;
-  totalFuel: number;
-  capacity: number;
-  utilizationPct: number;
-  todayConsumption: number;
-  todayRefills: number;
-  activeAlerts: number;
-  offlineDevices: number;
-  totalDevices: number;
+  tankCount: number | null;
+  totalFuel: number | null;
+  capacity: number | null;
+  utilizationPct: number | null;
+  todayConsumption: number | null;
+  todayRefills: number | null;
+  activeAlerts: number | null;
+  offlineDevices: number | null;
+  totalDevices: number | null;
   createdAt: string;
 }
 
-export function StationsBrowser({ initialRows, canCreate }: { initialRows: StationRow[]; canCreate: boolean }) {
+export function StationsBrowser({
+  initialRows,
+  canCreate,
+  canArchive,
+  canViewTanks,
+  canViewMovements,
+  canViewAlerts,
+  canViewDevices,
+}: {
+  initialRows: StationRow[];
+  canCreate: boolean;
+  canArchive: boolean;
+  canViewTanks: boolean;
+  canViewMovements: boolean;
+  canViewAlerts: boolean;
+  canViewDevices: boolean;
+}) {
   const query = useResourceQuery<StationRow>({
     endpoint: "/api/stations",
     initial: { rows: initialRows, total: initialRows.length, page: 1, pageSize: 25 },
@@ -50,22 +67,23 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
   const rows = query.rows as StationRow[];
   const target = rows.find((row) => row.id === archiveId) ?? null;
 
-  const archive = async () => {
+  const updateArchiveState = async () => {
     if (!target) return;
+    const restoring = target.isArchived;
     setBusy(true);
     try {
       const response = await fetch(`/api/stations/${target.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ isArchived: true, status: "offline" }),
+        body: JSON.stringify({ isArchived: !restoring }),
       });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("Station archived", `${target.name} is hidden from active views.`);
+        toast.success(restoring ? "Station restored" : "Station archived", target.name);
         setArchiveId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not archive the station.");
+        toast.error(payload.error?.message ?? (restoring ? "Could not restore the station." : "Could not archive the station."));
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -74,8 +92,8 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
     }
   };
 
-  const columns: Column<StationRow>[] = useMemo(
-    () => [
+  const columns: Column<StationRow>[] = useMemo(() => {
+    const result: Column<StationRow>[] = [
       {
         key: "name",
         header: "Station",
@@ -92,77 +110,103 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
         ),
       },
       { key: "status", header: "Status", width: "9%", cell: (row) => <StationStatusBadge status={row.status} /> },
-      {
-        key: "tanks",
-        header: "Tanks",
-        width: "7%",
-        numeric: true,
-        hideOnMobile: true,
-        cell: (row) => row.tankCount,
-      },
-      {
-        key: "fuel",
-        header: "Fuel on hand",
-        width: "14%",
-        numeric: true,
-        cell: (row) => (
-          <div>
-            <p className="text-num font-semibold text-[var(--ink)]">{formatNumber(row.totalFuel)} L</p>
-            <p className="text-[0.6875rem] text-[var(--ink-3)] text-num">
-              {formatPercent(row.capacity > 0 ? (row.totalFuel / row.capacity) * 100 : 0, 0)} of {formatNumber(row.capacity)} L
-            </p>
-          </div>
-        ),
-      },
-      {
-        key: "consumption",
-        header: "Outflow today",
-        width: "11%",
-        numeric: true,
-        hideOnMobile: true,
-        cell: (row) => <span className="text-num">{formatNumber(row.todayConsumption)} L</span>,
-      },
-      {
-        key: "refills",
-        header: "Refills today",
-        width: "11%",
-        numeric: true,
-        hideOnMobile: true,
-        cell: (row) => <span className="text-num">{formatNumber(row.todayRefills)} L</span>,
-      },
-      {
+    ];
+
+    if (canViewTanks) {
+      result.push(
+        {
+          key: "tanks",
+          header: "Tanks",
+          width: "7%",
+          numeric: true,
+          hideOnMobile: true,
+          cell: (row) => row.tankCount ?? "-",
+        },
+        {
+          key: "fuel",
+          header: "Fuel on hand",
+          width: "14%",
+          numeric: true,
+          cell: (row) => row.totalFuel == null || row.capacity == null ? "-" : (
+            <div>
+              <p className="text-num font-semibold text-[var(--ink)]">{formatNumber(row.totalFuel)} L</p>
+              <p className="text-[0.6875rem] text-[var(--ink-3)] text-num">
+                {formatPercent(row.capacity > 0 ? (row.totalFuel / row.capacity) * 100 : 0, 0)} of {formatNumber(row.capacity)} L
+              </p>
+            </div>
+          ),
+        },
+      );
+    }
+
+    if (canViewMovements) {
+      result.push(
+        {
+          key: "consumption",
+          header: "Outflow today",
+          width: "11%",
+          numeric: true,
+          hideOnMobile: true,
+          cell: (row) => row.todayConsumption == null ? "-" : <span className="text-num">{formatNumber(row.todayConsumption)} L</span>,
+        },
+        {
+          key: "refills",
+          header: "Refills today",
+          width: "11%",
+          numeric: true,
+          hideOnMobile: true,
+          cell: (row) => row.todayRefills == null ? "-" : <span className="text-num">{formatNumber(row.todayRefills)} L</span>,
+        },
+      );
+    }
+
+    if (canViewAlerts) {
+      result.push({
         key: "alerts",
         header: "Alerts",
         width: "8%",
         numeric: true,
-        cell: (row) =>
-          row.activeAlerts > 0 ? (
-            <span className="badge badge-crit">{row.activeAlerts} active</span>
-          ) : (
-            <span className="text-[0.75rem] text-[var(--ink-3)]">None</span>
-          ),
-      },
-      {
+        cell: (row) => row.activeAlerts != null && row.activeAlerts > 0 ? (
+          <span className="badge badge-crit">{row.activeAlerts} active</span>
+        ) : row.activeAlerts === 0 ? (
+          <span className="text-[0.75rem] text-[var(--ink-3)]">None</span>
+        ) : "-",
+      });
+    }
+
+    if (canViewDevices) {
+      result.push({
         key: "devices",
         header: "Devices",
         width: "7%",
         numeric: true,
         hideOnMobile: true,
-        cell: (row) => (
+        cell: (row) => row.totalDevices == null || row.offlineDevices == null ? "-" : (
           <span className="whitespace-nowrap text-num text-[0.8125rem]">
             {row.totalDevices - row.offlineDevices}/{row.totalDevices}
           </span>
         ),
-      },
-    ],
-    [],
-  );
+      });
+    }
+
+    return result;
+  }, [canViewAlerts, canViewDevices, canViewMovements, canViewTanks]);
 
   return (
     <div className="space-y-4">
       {query.error ? <LoadError message={query.error} onRetry={query.refresh} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label="Filter active or archived stations"
+          className="w-44"
+          value={query.filters.archived ?? ""}
+          onChange={(event) => query.setFilter("archived", event.target.value)}
+          options={[
+            { value: "", label: "Active stations" },
+            { value: "true", label: "Archived stations" },
+          ]}
+        />
         <Select
           aria-label="Filter by status"
           className="w-40"
@@ -197,13 +241,21 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
             { header: "City", value: (row) => row.city },
             { header: "Region", value: (row) => row.region },
             { header: "Status", value: (row) => row.status },
-            { header: "Tanks", value: (row) => row.tankCount },
-            { header: "Fuel on hand (L)", value: (row) => row.totalFuel },
-            { header: "Capacity (L)", value: (row) => row.capacity },
-            { header: "Utilization (%)", value: (row) => row.utilizationPct },
-            { header: "Outflow today (L)", value: (row) => row.todayConsumption },
-            { header: "Refills today (L)", value: (row) => row.todayRefills },
-            { header: "Active alerts", value: (row) => row.activeAlerts },
+            ...(canViewTanks ? [
+              { header: "Tanks", value: (row: StationRow) => row.tankCount ?? "-" },
+              { header: "Fuel on hand (L)", value: (row: StationRow) => row.totalFuel ?? "-" },
+              { header: "Capacity (L)", value: (row: StationRow) => row.capacity ?? "-" },
+              { header: "Utilization (%)", value: (row: StationRow) => row.utilizationPct ?? "-" },
+            ] : []),
+            ...(canViewMovements ? [
+              { header: "Outflow today (L)", value: (row: StationRow) => row.todayConsumption ?? "-" },
+              { header: "Refills today (L)", value: (row: StationRow) => row.todayRefills ?? "-" },
+            ] : []),
+            ...(canViewAlerts ? [{ header: "Active alerts", value: (row: StationRow) => row.activeAlerts ?? "-" }] : []),
+            ...(canViewDevices ? [{
+              header: "Devices",
+              value: (row: StationRow) => row.totalDevices == null || row.offlineDevices == null ? "-" : `${row.totalDevices - row.offlineDevices}/${row.totalDevices}`,
+            }] : []),
             { header: "Latitude", value: (row) => row.latitude },
             { header: "Longitude", value: (row) => row.longitude },
           ]}
@@ -241,19 +293,21 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
           searchPlaceholder="Search stations by name, code or city…"
           emptyTitle="No stations have been added yet"
           emptyDescription="Stations group your tanks, devices and users. Add your first station to begin monitoring."
-          emptyAction={
+          emptyAction={canCreate ? (
             <Link href="/stations/new" className="btn btn-primary btn-sm">
               Add station
             </Link>
-          }
+          ) : undefined}
           rowActions={(row) => (
             <div className="flex items-center justify-end gap-2 whitespace-nowrap">
               <Link href={`/stations/${row.id}`} className="btn btn-ghost btn-sm">
                 View
               </Link>
-              <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
-                Archive
-              </Button>
+              {canArchive ? (
+                <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
+                  {row.isArchived ? "Restore" : "Archive"}
+                </Button>
+              ) : null}
             </div>
           )}
         />
@@ -262,10 +316,12 @@ export function StationsBrowser({ initialRows, canCreate }: { initialRows: Stati
       <ConfirmDialog
         open={Boolean(target)}
         onClose={() => setArchiveId(null)}
-        onConfirm={archive}
-        title="Archive this station?"
-        message={`${target?.name ?? "This station"} will be hidden from active views. Its tanks, readings and alerts are preserved and can be restored later.`}
-        confirmLabel="Archive station"
+        onConfirm={updateArchiveState}
+        title={target?.isArchived ? "Restore this station?" : "Archive this station?"}
+        message={target?.isArchived
+          ? `${target.name} will return to active views. Historical tanks, readings and alerts remain intact.`
+          : `${target?.name ?? "This station"} will be hidden from active views. Its tanks, readings and alerts are preserved and can be restored later.`}
+        confirmLabel={target?.isArchived ? "Restore station" : "Archive station"}
         loading={busy}
       />
     </div>

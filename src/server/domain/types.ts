@@ -299,7 +299,7 @@ export interface Report {
   dateFrom: string;
   dateTo: string;
   filters: Record<string, unknown>;
-  status: "queued" | "generating" | "ready" | "failed";
+  status: "queued" | "generating" | "ready" | "failed" | "archived";
   progress: number;
   format: "pdf" | "excel" | "csv";
   fileUrl: string | null;

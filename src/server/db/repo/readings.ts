@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { execute, id, insertMany, query, queryOne } from "../client";
 import { parseJson } from "./core";
 import type { Reading } from "../../domain/types";
@@ -46,6 +47,61 @@ export async function insertReading(input: ReadingInput): Promise<Reading> {
     ],
   ));
   return (await getReading(readingId))!;
+}
+
+/**
+ * Insert a live reading exactly once for a device/timestamp pair. Call inside a
+ * transaction after locking the tank row; the deterministic primary key is the
+ * final guard when the same request is submitted concurrently.
+ */
+export async function insertReadingOnce(input: ReadingInput): Promise<{ reading: Reading; inserted: boolean }> {
+  const digest = createHash("sha256").update(`${input.deviceId}\0${input.ts}`).digest("hex").slice(0, 48);
+  const readingId = `rdg_ing_${digest}`;
+  const result = await execute(
+    `INSERT INTO readings (id, ts, organization_id, tank_id, device_id, volume_liters, level_percent,
+       level_mm, temperature_c, water_level_mm, signal, battery_pct, raw)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO NOTHING`,
+    [
+      readingId,
+      input.ts,
+      input.organizationId,
+      input.tankId,
+      input.deviceId,
+      input.volumeLiters,
+      input.levelPercent ?? null,
+      input.levelMm ?? null,
+      input.temperatureC ?? null,
+      input.waterLevelMm ?? null,
+      input.signal ?? null,
+      input.batteryPct ?? null,
+      input.raw ? JSON.stringify(input.raw) : null,
+    ],
+  );
+  const reading = await getReading(readingId);
+  if (!reading || reading.deviceId !== input.deviceId || reading.ts !== input.ts) {
+    throw new Error("Could not verify the idempotent reading record");
+  }
+  return { reading, inserted: result.changes > 0 };
+}
+
+export async function readingForDeviceAt(deviceId: string, ts: string): Promise<Reading | null> {
+  const instant = Date.parse(ts);
+  if (!Number.isFinite(instant)) return null;
+
+  // Older versions stored ISO timestamps with the provider's original offset,
+  // while current ingestion canonicalizes them to UTC. Search the UTC date and
+  // its two neighboring local dates (the widest valid ISO-8601 offsets are
+  // within 14 hours), then compare parsed instants in application code.
+  const utcDate = new Date(instant);
+  const from = new Date(Date.UTC(utcDate.getUTCFullYear(), utcDate.getUTCMonth(), utcDate.getUTCDate() - 1));
+  const to = new Date(Date.UTC(utcDate.getUTCFullYear(), utcDate.getUTCMonth(), utcDate.getUTCDate() + 2));
+  const rows = await query<Record<string, unknown>>(
+    "SELECT * FROM readings WHERE device_id = ? AND ts >= ? AND ts < ? ORDER BY ts DESC",
+    [deviceId, from.toISOString().slice(0, 10), to.toISOString().slice(0, 10)],
+  );
+  const matchingRow = rows.find((row) => Date.parse(String(row.ts)) === instant);
+  return matchingRow ? mapReading(matchingRow) : null;
 }
 
 export async function insertReadingsBulk(inputs: ReadingInput[]): Promise<number> {
@@ -167,11 +223,6 @@ export async function countReadings(orgId: string): Promise<number> {
   return Number((await queryOne<{ n: number }>("SELECT count(*) AS n FROM readings WHERE organization_id = ?", [orgId]))?.n ?? 0);
 }
 
-/** Removes raw readings older than the retention window (data lifecycle). */
-export async function pruneReadings(orgId: string, olderThanIso: string): Promise<number> {
-  const result = (await execute("DELETE FROM readings WHERE organization_id = ? AND ts < ?", [orgId, olderThanIso]));
-  return result.changes;
-}
 
 function mapReading(row: Record<string, unknown>): Reading {
   return {

@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
 import { listAuditLogs } from "@/server/db/repo/core";
@@ -10,7 +11,7 @@ export default async function AuditLogsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const logs = (await listAuditLogs({ orgId: user.organizationId, pageSize: 500 })).rows;
+  const logs = (await listAuditLogs({ orgId: user.organizationId, pageSize: 500, stationIds: stationScopeForUser(user) })).rows;
 
   const rows = logs.map((log) => ({
     id: log.id,

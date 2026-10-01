@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MapPin, Navigation } from "lucide-react";
@@ -15,10 +16,13 @@ export default async function MapPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const dashboard = (await buildDashboard(user.organizationId, "7d", user.stationIds));
-  const stations = (await listAllStations(user.organizationId));
-  const tanks = (await listAllTanks(user.organizationId));
-  const vehicles = (await listAllVehicles(user.organizationId));
+  const dashboard = (await buildDashboard(user.organizationId, "7d", stationScopeForUser(user)));
+  const allowedStationIds = stationScopeForUser(user);
+  const inStationScope = (stationId: string | null | undefined) =>
+    allowedStationIds === undefined || (stationId != null && allowedStationIds.includes(stationId));
+  const stations = (await listAllStations(user.organizationId)).filter((station) => inStationScope(station.id));
+  const tanks = (await listAllTanks(user.organizationId)).filter((tank) => inStationScope(tank.stationId));
+  const vehicles = (await listAllVehicles(user.organizationId)).filter((vehicle) => inStationScope(vehicle.stationId));
 
   const stationSummary = new Map(dashboard.stations.map((entry) => [entry.station.id, entry]));
 

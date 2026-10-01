@@ -1,7 +1,8 @@
+import { hasOrganizationWideStationAccess, stationScopeForUser, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { CalendarClock, Mail } from "lucide-react";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listScheduledReports } from "@/server/db/repo/reports";
 import { listAllStations } from "@/server/db/repo/stations";
 import { listUsers } from "@/server/db/repo/core";
@@ -17,11 +18,12 @@ export default async function ScheduledReportsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const scheduled = (await listScheduledReports(user.organizationId, user.stationIds));
+  const scheduled = (await listScheduledReports(user.organizationId, stationScopeForUser(user)));
   const stations = (await listAllStations(user.organizationId)).filter(
-    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+    (station) => userCanAccessStation(user, station.id),
   );
-  const users = (await listUsers(user.organizationId));
+  const users = (await listUsers(user.organizationId, stationScopeForUser(user)))
+    .filter((entry) => userCanAccessStationScopedUser(user, entry.stationIds, entry.roleKey));
 
   const rows = scheduled.map((entry) => ({
     id: entry.id,
@@ -64,7 +66,7 @@ export default async function ScheduledReportsPage() {
         initialRows={rows}
         stationOptions={stations.map((station) => ({ id: station.id, name: station.name }))}
         recipientOptions={users.map((entry) => entry.email)}
-        allowAllStations={user.stationIds.length === 0}
+        allowAllStations={hasOrganizationWideStationAccess(user)}
       />
 
       <section className="card p-5">

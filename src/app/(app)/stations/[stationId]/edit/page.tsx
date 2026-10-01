@@ -1,3 +1,4 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
 import { getOrganization } from "@/server/db/repo/core";
@@ -13,7 +14,7 @@ export default async function EditStationPage({ params }: { params: Promise<{ st
   if (!user) return null;
 
   const station = (await getStation(stationId));
-  if (!station || station.organizationId !== user.organizationId) notFound();
+  if (!station || station.organizationId !== user.organizationId || !userCanAccessStation(user, stationId)) notFound();
 
   const organization = (await getOrganization(user.organizationId));
 

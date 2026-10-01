@@ -15,7 +15,7 @@ import { listAllStations, listAllTanks, listFuelTypes } from "@/server/db/repo/s
 import { listEvents } from "@/server/db/repo/events";
 import { listAlerts } from "@/server/db/repo/alerts";
 import { listAllVehicles, listAllDevices } from "@/server/db/repo/devices";
-import { listAuditLogs, listUsers } from "@/server/db/repo/core";
+import { listAuditLogs } from "@/server/db/repo/core";
 import { buildDashboard, buildStationDetail } from "@/server/services/analytics";
 import { reconcileTank, stockCoverage } from "@/server/engine/fuel";
 import type { Report } from "@/server/domain/types";
@@ -47,13 +47,13 @@ export function reportStationId(report: Report): string | null {
 
 export function reportStationIsAllowed(report: Report, allowedStationIds?: string[]): boolean {
   const selectedStationId = reportStationId(report);
-  return !allowedStationIds || allowedStationIds.length === 0 || !selectedStationId || allowedStationIds.includes(selectedStationId);
+  return allowedStationIds === undefined || (selectedStationId !== null && allowedStationIds.includes(selectedStationId));
 }
 
 function reportStationScope(report: Report, allowedStationIds?: string[]): string[] | undefined {
   const selectedStationId = reportStationId(report);
   if (selectedStationId) return [selectedStationId];
-  return allowedStationIds && allowedStationIds.length > 0 ? allowedStationIds : undefined;
+  return allowedStationIds;
 }
 
 async function movementRows(
@@ -221,7 +221,7 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
     }
 
     case "vehicles": {
-      const vehicles = (await listAllVehicles(orgId)).filter((vehicle) => !stationIds || (vehicle.stationId != null && stationIds.includes(vehicle.stationId)));
+      const vehicles = (await listAllVehicles(orgId, true)).filter((vehicle) => !stationIds || (vehicle.stationId != null && stationIds.includes(vehicle.stationId)));
       if (vehicles.length === 0) return empty("No vehicles have been added yet.");
       const vehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
       const deviceSerial = new Map(
@@ -245,15 +245,12 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
     }
 
     case "audit": {
-      const users = stationIds
-        ? (await listUsers(orgId)).filter((user) => user.stationIds.length === 0 || user.stationIds.some((stationId) => stationIds.includes(stationId)))
-        : [];
       const logs = (await listAuditLogs({
         orgId,
         from,
         to,
         pageSize: 5000,
-        userIds: stationIds ? users.map((user) => user.id) : undefined,
+        stationIds,
       })).rows;
       if (logs.length === 0) return empty("No audit entries in this period.");
       return {

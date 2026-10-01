@@ -1,3 +1,5 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
+import { hasPermission } from "@/server/auth/permissions";
 import type { ScheduledReport } from "@/server/domain/types";
 import { createScheduledReport, listScheduledReports } from "@/server/db/repo/reports";
 import { listAllStations } from "@/server/db/repo/stations";
@@ -20,8 +22,11 @@ export const dynamic = "force-dynamic";
 
 export const GET = withPermission("reports.view", async (request, ctx) => {
   try {
-    const rows = (await listScheduledReports(ctx.user.organizationId, ctx.user.stationIds));
-    return jsonOk({ rows, total: rows.length });
+    const rows = (await listScheduledReports(ctx.user.organizationId, stationScopeForUser(ctx.user)));
+    const visibleRows = hasPermission(ctx.user, "reports.schedule")
+      ? rows
+      : rows.map((row) => ({ ...row, recipients: [] }));
+    return jsonOk({ rows: visibleRows, total: visibleRows.length });
   } catch (error) {
     return jsonError(error as Error, request);
   }
@@ -44,10 +49,10 @@ export const POST = withPermission("reports.schedule", async (request, ctx) => {
       if (!stations.some((station) => station.id === requestedStationId)) {
         throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
       }
-      if (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(requestedStationId)) {
+      if (!userCanAccessStation(ctx.user, requestedStationId)) {
         throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
       }
-    } else if (ctx.user.stationIds.length > 0) {
+    } else if (stationScopeForUser(ctx.user) !== undefined) {
       throw new ApiError(403, "A station must be selected for a scoped scheduled report.", "forbidden");
     }
     let scheduled!: ScheduledReport;

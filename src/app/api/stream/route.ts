@@ -1,6 +1,7 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import { latestReadingForTank } from "@/server/db/repo/readings";
 import { listStations, listTanks } from "@/server/db/repo/stations";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -23,6 +24,14 @@ export async function GET(request: Request) {
     );
   }
 
+  if (!hasPermission(user, "dashboard.view")) {
+    return Response.json(
+      { ok: false, error: { code: "forbidden", message: "You do not have permission to view the dashboard stream." } },
+      { status: 403, headers: { "content-type": "application/json" } },
+    );
+  }
+
+  const allowedStationIds = stationScopeForUser(user);
   const encoder = new TextEncoder();
   let streamController: ReadableStreamDefaultController<Uint8Array> | null = null;
   let closed = false;
@@ -47,7 +56,7 @@ export async function GET(request: Request) {
   // process-local event bus. That keeps updates correct when Vercel scales across
   // many short-lived function instances; clients reconnect after the bounded
   // function lifetime.
-  const tick = async () => { send("tick", await buildSnapshot(user.organizationId)); };
+  const tick = async () => { send("tick", await buildSnapshot(user.organizationId, allowedStationIds)); };
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -77,9 +86,9 @@ export async function GET(request: Request) {
   });
 }
 
-async function buildSnapshot(organizationId: string) {
+async function buildSnapshot(organizationId: string, stationIds?: string[]) {
   try {
-    const tanks = (await listTanks({ orgId: organizationId, pageSize: 200, includeArchived: false })).rows;
+    const tanks = (await listTanks({ orgId: organizationId, pageSize: 200, includeArchived: false, stationIds })).rows;
     const levels = await Promise.all(tanks.map(async (tank) => {
       const reading = (await latestReadingForTank(tank.id));
       return {
@@ -90,7 +99,7 @@ async function buildSnapshot(organizationId: string) {
         ts: reading?.ts ?? null,
       };
     }));
-    const stations = (await listStations({ orgId: organizationId, pageSize: 200 })).rows;
+    const stations = (await listStations({ orgId: organizationId, pageSize: 200, stationIds })).rows;
     return {
       at: new Date().toISOString(),
       totalFuel: levels.reduce((sum, level) => sum + (level.volumeLiters ?? 0), 0),

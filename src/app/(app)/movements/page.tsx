@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { getCurrentUser } from "@/server/auth/session";
 import { listEvents, movementTotals } from "@/server/db/repo/events";
@@ -13,8 +14,8 @@ export default async function MovementsPage() {
 
   const from = isoDaysAgo(14);
   const to = new Date().toISOString();
-  const { rows } = (await listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50 }));
-  const totals = (await movementTotals(user.organizationId, from, to));
+  const { rows } = (await listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50, stationIds: stationScopeForUser(user) }));
+  const totals = (await movementTotals(user.organizationId, from, to, undefined, undefined, stationScopeForUser(user)));
 
   return (
     <div className="space-y-5">

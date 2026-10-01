@@ -88,7 +88,7 @@ export const NAV_SECTIONS: NavSection[] = [
         permission: "reports.view",
         children: [
           { label: "All reports", href: "/reports", permission: "reports.view" },
-          { label: "Scheduled", href: "/reports/scheduled", permission: "reports.view" },
+          { label: "Scheduled", href: "/reports/scheduled", permission: "reports.schedule" }
         ],
       },
     ],
@@ -127,7 +127,7 @@ export const NAV_SECTIONS: NavSection[] = [
         children: [
           { label: "Organization", href: "/settings", permission: "settings.view" },
           { label: "Fuel types", href: "/settings/fuel-types", permission: "fuel_types.manage" },
-          { label: "Notifications", href: "/settings/notifications", permission: "settings.view" },
+          { label: "Notifications", href: "/settings/notifications", permission: "settings.manage" },
           { label: "System", href: "/settings/system", permission: "settings.manage" },
         ],
       },

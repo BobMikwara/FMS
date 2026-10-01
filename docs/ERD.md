@@ -106,9 +106,11 @@ tracker points at `vehicle_id`.
 `api_key_hash` stores a SHA-256 of the device ingest key. **The key itself is never stored and
 never returned by the API layer.**
 
-`status` is `never_connected | online | delayed | offline | fault`. `never_connected` is
-distinct from `offline` so a freshly registered device is not immediately reported as a
-failure.
+`status` is `never_connected | online | delayed | offline | fault`. A newly registered
+`never_connected` device receives the configured offline-timeout grace period from its creation
+time. If it still has not reported when that grace period expires, the health sweep marks it
+`offline` and raises an alert. This avoids an immediate failure alert while keeping an unprovisioned
+device operationally visible.
 
 ### `vehicles`
 The fleet. `station_id` is the home station (used as a fallback position on the map when no GPS

@@ -1,3 +1,4 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import { getReport } from "@/server/db/repo/reports";
 import { buildReportTable, reportStationIsAllowed } from "@/server/services/report-builder";
 import { toCsv } from "@/lib/export";
@@ -23,14 +24,14 @@ const EXTENSION: Record<string, string> = {
  * showed. Excel output uses SpreadsheetML so it opens natively in Excel,
  * LibreOffice and Google Sheets without a server-side rendering engine.
  */
-export const GET = withPermission("reports.view", async (request, ctx) => {
+export const GET = withPermission("reports.export", async (request, ctx) => {
   try {
     const report = (await getReport(ctx.params?.reportId ?? ""));
-    if (!report || report.organizationId !== ctx.user.organizationId || !reportStationIsAllowed(report, ctx.user.stationIds)) return jsonError(notFound(), request);
+    if (!report || report.organizationId !== ctx.user.organizationId || !reportStationIsAllowed(report, stationScopeForUser(ctx.user))) return jsonError(notFound(), request);
 
     const requested = new URL(request.url).searchParams.get("format") ?? report.format;
     const format = MIME[requested] ? requested : "csv";
-    const table = (await buildReportTable(report, ctx.user.stationIds));
+    const table = (await buildReportTable(report, stationScopeForUser(ctx.user)));
 
     const filename = `${report.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "report"}-${report.id}.${EXTENSION[format]}`;
     let body: string;

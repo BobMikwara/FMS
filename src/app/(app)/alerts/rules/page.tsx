@@ -1,4 +1,5 @@
-import { getCurrentUser } from "@/server/auth/session";
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listAlertRules } from "@/server/db/repo/alerts";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
 import { PageHeader } from "@/components/ui/layout";
@@ -11,16 +12,11 @@ export default async function AlertRulesPage() {
   if (!user) return null;
 
   const allTanks = await listAllTanks(user.organizationId);
-  const tanks = allTanks.filter((tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId));
+  const tanks = allTanks.filter((tank) => userCanAccessStation(user, tank.stationId));
   const stations = (await listAllStations(user.organizationId)).filter(
-    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+    (station) => userCanAccessStation(user, station.id),
   );
-  const rules = (await listAlertRules(user.organizationId)).filter((rule) => {
-    if (user.stationIds.length === 0) return true;
-    if (rule.stationId) return user.stationIds.includes(rule.stationId);
-    if (rule.tankId) return tanks.some((tank) => tank.id === rule.tankId);
-    return false;
-  });
+  const rules = await listAlertRules(user.organizationId, stationScopeForUser(user));
   const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
 
@@ -35,13 +31,13 @@ export default async function AlertRulesPage() {
       <PageHeader
         title="Alert rules"
         description="Thresholds decide when an alert is raised. Rules can be scoped to a single tank, a whole station, a device or the entire organization."
-        actions={
+        actions={hasPermission(user, "alert_rules.manage") ? (
           <a href="/alerts/rules/new" className="btn btn-primary btn-sm">
             Create rule
           </a>
-        }
+        ) : undefined}
       />
-      <RulesBrowser initialRows={rows} />
+      <RulesBrowser initialRows={rows} canManage={hasPermission(user, "alert_rules.manage")} />
     </div>
   );
 }

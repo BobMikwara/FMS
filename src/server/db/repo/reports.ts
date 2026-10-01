@@ -14,11 +14,16 @@ export interface ReportFilter {
   page?: number;
   pageSize?: number;
   stationIds?: string[];
+  includeArchived?: boolean;
+  archivedOnly?: boolean;
 }
 
 export async function listReports(filter: ReportFilter): Promise<{ rows: Report[]; total: number }> {
+  if (filter.stationIds !== undefined && filter.stationIds.length === 0) return { rows: [], total: 0 };
   const where: string[] = ["r.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
+  if (filter.archivedOnly) where.push("r.status = 'archived'");
+  else if (!filter.includeArchived) where.push("r.status != 'archived'");
   if (filter.category) {
     where.push("r.category = ?");
     params.push(filter.category);
@@ -34,7 +39,7 @@ export async function listReports(filter: ReportFilter): Promise<{ rows: Report[
   const clause = `WHERE ${where.join(" AND ")}`;
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(100, Math.max(5, filter.pageSize ?? 20));
-  const needsStationPostFilter = Boolean(filter.stationIds && filter.stationIds.length > 0);
+  const needsStationPostFilter = filter.stationIds !== undefined;
   const rows = (await query<Record<string, unknown>>(
     `SELECT r.*, u.name AS created_by_name FROM reports r JOIN users u ON u.id = r.created_by_id
      ${clause} ORDER BY r.created_at DESC ${needsStationPostFilter ? "" : "LIMIT ? OFFSET ?"}`,
@@ -42,7 +47,7 @@ export async function listReports(filter: ReportFilter): Promise<{ rows: Report[
   )).map(mapReport).filter((report) => {
     if (!needsStationPostFilter) return true;
     const selectedStationId = typeof report.filters.stationId === "string" ? report.filters.stationId : null;
-    return !selectedStationId || filter.stationIds!.includes(selectedStationId);
+    return selectedStationId !== null && filter.stationIds!.includes(selectedStationId);
   });
   const total = rows.length;
   return {
@@ -110,7 +115,13 @@ export async function updateReport(reportId: string, patch: Record<string, unkno
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     fields.push(`${snake(key)} = ?`);
-    values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    values.push(
+      typeof value === "boolean"
+        ? (value ? 1 : 0)
+        : key === "filters" || key === "summary"
+          ? JSON.stringify(value)
+          : value,
+    );
   }
   if (fields.length === 0) return (await getReport(reportId));
   values.push(reportId);
@@ -118,8 +129,8 @@ export async function updateReport(reportId: string, patch: Record<string, unkno
   return (await getReport(reportId));
 }
 
-export async function deleteReport(reportId: string): Promise<void> {
-  (await execute("DELETE FROM reports WHERE id = ?", [reportId]));
+export async function archiveReport(reportId: string): Promise<Report | null> {
+  return (await updateReport(reportId, { status: "archived" }));
 }
 
 export async function countReports(orgId: string): Promise<number> {
@@ -157,7 +168,8 @@ export async function listScheduledReports(orgId: string, stationIds?: string[])
     "SELECT * FROM scheduled_reports WHERE organization_id = ? ORDER BY is_enabled DESC, name",
     [orgId],
   )).map(mapScheduled);
-  if (!stationIds || stationIds.length === 0) return rows;
+  if (stationIds === undefined) return rows;
+  if (stationIds.length === 0) return [];
   return rows.filter((row) => row.stationId != null && stationIds.includes(row.stationId));
 }
 
@@ -215,7 +227,13 @@ export async function updateScheduledReport(scheduledId: string, patch: Record<s
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     fields.push(`${snake(key)} = ?`);
-    values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    values.push(
+      typeof value === "boolean"
+        ? (value ? 1 : 0)
+        : key === "recipients" || key === "filters"
+          ? JSON.stringify(value)
+          : value,
+    );
   }
   if (fields.length === 0) return (await getScheduledReport(scheduledId));
   values.push(scheduledId);
@@ -223,8 +241,8 @@ export async function updateScheduledReport(scheduledId: string, patch: Record<s
   return (await getScheduledReport(scheduledId));
 }
 
-export async function deleteScheduledReport(scheduledId: string): Promise<void> {
-  (await execute("DELETE FROM scheduled_reports WHERE id = ?", [scheduledId]));
+export async function disableScheduledReport(scheduledId: string): Promise<ScheduledReport | null> {
+  return (await updateScheduledReport(scheduledId, { isEnabled: false }));
 }
 
 function mapScheduled(row: Record<string, unknown>): ScheduledReport {

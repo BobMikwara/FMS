@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Check, CheckCircle2, Clock, Copy, KeyRound, Plug, XCircle } from "lucide-react";
 import { Badge, useToast } from "@/components/ui/feedback";
 import { Button } from "@/components/ui/button";
-import { ConfirmDialog, Modal } from "@/components/ui/overlay";
+import { Modal } from "@/components/ui/overlay";
 import { timeAgo } from "@/lib/utils";
 
 interface IntegrationRow {
@@ -47,7 +47,7 @@ const EXAMPLE_PAYLOADS: Record<string, string> = {
       levelPercent: 76.8,
       temperatureC: 28.4,
       waterLevelMm: 0,
-      signal: "good",
+      signal: -67,
     },
     null,
     2,
@@ -96,13 +96,11 @@ const EXAMPLE_PAYLOADS: Record<string, string> = {
   ),
 };
 
-export function IntegrationsBrowser({ initialRows }: { initialRows: IntegrationRow[] }) {
+export function IntegrationsBrowser({ initialRows, canManage }: { initialRows: IntegrationRow[]; canManage: boolean }) {
   const [rows, setRows] = useState<IntegrationRow[]>(initialRows);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [detail, setDetail] = useState<IntegrationRow | null>(null);
   const [copied, setCopied] = useState(false);
-  const [confirmId, setConfirmId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const toast = useToast();
 
   const origin = typeof window === "undefined" ? "" : window.location.origin;
@@ -134,27 +132,6 @@ export function IntegrationsBrowser({ initialRows }: { initialRows: IntegrationR
     }
   };
 
-  const remove = async () => {
-    const integration = rows.find((row) => row.id === confirmId);
-    if (!integration) return;
-    setBusy(true);
-    try {
-      const response = await fetch(`/api/integrations/${integration.id}`, { method: "DELETE" });
-      const payload = await response.json();
-      if (payload.ok) {
-        setRows((current) => current.filter((row) => row.id !== integration.id));
-        toast.success("Integration removed", integration.name);
-        setConfirmId(null);
-      } else {
-        toast.error(payload.error?.message ?? "Could not remove the integration.");
-      }
-    } catch {
-      toast.error("Could not reach the server. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const copyEndpoint = async (provider: string) => {
     const url = `${origin}/api/webhooks/device/${provider}`;
     try {
@@ -167,7 +144,6 @@ export function IntegrationsBrowser({ initialRows }: { initialRows: IntegrationR
     }
   };
 
-  const confirmTarget = rows.find((row) => row.id === confirmId) ?? null;
   const example = detail ? EXAMPLE_PAYLOADS[detail.provider] : undefined;
 
   return (
@@ -222,17 +198,16 @@ export function IntegrationsBrowser({ initialRows }: { initialRows: IntegrationR
                     <Button size="sm" variant="ghost" onClick={() => setDetail(integration)}>
                       Details
                     </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      loading={busyId === integration.id}
-                      onClick={() => setStatus(integration, live ? "disconnected" : "connected")}
-                    >
-                      {live ? "Disable" : "Connect"}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => setConfirmId(integration.id)}>
-                      Remove
-                    </Button>
+                    {canManage ? (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        loading={busyId === integration.id}
+                        onClick={() => setStatus(integration, live ? "disconnected" : "connected")}
+                      >
+                        {live ? "Disable" : "Connect"}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
               </li>
@@ -323,15 +298,6 @@ export function IntegrationsBrowser({ initialRows }: { initialRows: IntegrationR
         ) : null}
       </Modal>
 
-      <ConfirmDialog
-        open={Boolean(confirmTarget)}
-        onClose={() => setConfirmId(null)}
-        onConfirm={remove}
-        title="Remove this integration?"
-        message={`${confirmTarget?.name ?? "This integration"} will stop receiving data. Historical readings are preserved.`}
-        confirmLabel="Remove integration"
-        loading={busy}
-      />
     </div>
   );
 }

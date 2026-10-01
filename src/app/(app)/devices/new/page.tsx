@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import { getCurrentUser } from "@/server/auth/session";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
 import { listAllVehicles } from "@/server/db/repo/devices";
@@ -15,18 +16,18 @@ export default async function NewDevicePage() {
 
   const orgId = user.organizationId;
   const stations = (await listAllStations(orgId)).filter(
-    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+    (station) => userCanAccessStation(user, station.id),
   );
   const tanks = (await listAllTanks(orgId)).filter(
-    (tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId),
+    (tank) => userCanAccessStation(user, tank.stationId),
   );
   const vehicles = (await listAllVehicles(orgId)).filter(
-    (vehicle) => user.stationIds.length === 0 || (vehicle.stationId && user.stationIds.includes(vehicle.stationId)),
+    (vehicle) => userCanAccessStation(user, vehicle.stationId),
   );
   const fuelTypes = (await listFuelTypes(orgId));
 
   // A tank can only have one probe, so tanks that already have one are excluded.
-  const probes = (await listDevices({ orgId, type: "fuel_probe", pageSize: 500 })).rows;
+  const probes = (await listDevices({ orgId, type: "fuel_probe", pageSize: 500, stationIds: stationScopeForUser(user) })).rows;
   const probedTanks = new Set(probes.map((device) => device.tankId));
   const fuelLabel = new Map(fuelTypes.map((fuelType) => [fuelType.id, fuelType.displayName]));
   const stationLabel = new Map(stations.map((station) => [station.id, station.name]));

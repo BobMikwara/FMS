@@ -22,9 +22,12 @@ export interface EventFilter {
 export async function listEvents(filter: EventFilter): Promise<{ rows: FuelEvent[]; total: number }> {
   const where: string[] = ["e.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`e.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`e.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.stationId) {
     where.push("e.station_id = ?");
@@ -155,9 +158,6 @@ export async function createEvent(input: {
   return (await getEvent(eventId))!;
 }
 
-export async function deleteEvent(eventId: string): Promise<void> {
-  (await execute("DELETE FROM fuel_events WHERE id = ?", [eventId]));
-}
 
 export async function updateEvent(eventId: string, patch: Record<string, unknown>): Promise<FuelEvent | null> {
   const fields: string[] = [];
@@ -196,9 +196,12 @@ export async function movementTotals(
 ): Promise<MovementTotals> {
   const where: string[] = ["organization_id = ?", "ts >= ?", "ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
+      params.push(...stationIds);
+    }
   }
   if (stationId) {
     where.push("station_id = ?");
@@ -215,7 +218,7 @@ export async function movementTotals(
        COALESCE(SUM(CASE WHEN type = 'refill' THEN 1 ELSE 0 END), 0) AS refill_count,
        COALESCE(SUM(CASE WHEN type = 'consumption' THEN volume ELSE 0 END), 0) AS consumption,
        COALESCE(SUM(CASE WHEN type = 'consumption' THEN 1 ELSE 0 END), 0) AS consumption_count,
-       COALESCE(SUM(CASE WHEN type = 'anomaly' AND status = 'suspected' THEN volume ELSE 0 END), 0) AS suspected_loss,
+       COALESCE(SUM(CASE WHEN type = 'anomaly' AND status = 'suspected' AND level_after < level_before THEN volume ELSE 0 END), 0) AS suspected_loss,
        COALESCE(SUM(CASE WHEN type = 'anomaly' THEN 1 ELSE 0 END), 0) AS anomalies
      FROM fuel_events WHERE ${clause}`,
     params,
@@ -250,9 +253,12 @@ export async function movementSeries(
   const fmt = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
   const where: string[] = ["organization_id = ?", "ts >= ?", "ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
+      params.push(...stationIds);
+    }
   }
   if (stationId) {
     where.push("station_id = ?");
@@ -287,9 +293,12 @@ export async function levelSeries(
   const fmt = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
   const where: string[] = ["r.organization_id = ?", "r.ts >= ?", "r.ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`r.tank_id IN (SELECT id FROM tanks WHERE station_id IN (${stationIds.map(() => "?").join(", ")}))`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`r.tank_id IN (SELECT id FROM tanks WHERE organization_id = ? AND station_id IN (${stationIds.map(() => "?").join(", ")}))`);
+      params.push(orgId, ...stationIds);
+    }
   }
   if (stationId) {
     where.push("r.tank_id IN (SELECT id FROM tanks WHERE station_id = ?)");

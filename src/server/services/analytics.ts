@@ -159,19 +159,34 @@ export async function buildDashboard(
   const range = rangeFor(period);
   const today = rangeFor("today");
   const organization = (await getOrganization(orgId));
-  const scopedStationIds = stationIds && stationIds.length > 0 ? stationIds : undefined;
+  const scopedStationIds = stationIds;
   const allStations = await listAllStations(orgId);
-  const stations = scopedStationIds ? allStations.filter((station) => scopedStationIds.includes(station.id)) : allStations;
+  const stations = scopedStationIds !== undefined ? allStations.filter((station) => scopedStationIds.includes(station.id)) : allStations;
   const allTanks = await listAllTanks(orgId);
-  const tanks = scopedStationIds ? allTanks.filter((tank) => scopedStationIds.includes(tank.stationId)) : allTanks;
+  const tanks = scopedStationIds !== undefined ? allTanks.filter((tank) => scopedStationIds.includes(tank.stationId)) : allTanks;
   const fuelTypes = (await listFuelTypes(orgId));
   const allDevices = await listAllDevices(orgId);
-  const tankIds = new Set(tanks.map((tank) => tank.id));
-  const devices = scopedStationIds
-    ? allDevices.filter((device) => (device.stationId ? scopedStationIds.includes(device.stationId) : device.tankId ? tankIds.has(device.tankId) : false))
-    : allDevices;
   const allVehicles = await listAllVehicles(orgId);
-  const vehicles = scopedStationIds ? allVehicles.filter((vehicle) => vehicle.stationId && scopedStationIds.includes(vehicle.stationId)) : allVehicles;
+  const tankIds = new Set(tanks.map((tank) => tank.id));
+  const vehicleIds = new Set(
+    scopedStationIds === undefined
+      ? allVehicles.map((vehicle) => vehicle.id)
+      : allVehicles.filter((vehicle) => vehicle.stationId && scopedStationIds.includes(vehicle.stationId)).map((vehicle) => vehicle.id),
+  );
+  const devices = scopedStationIds !== undefined
+    ? allDevices.filter((device) => {
+        const hasAllowedStation =
+          Boolean(device.stationId && scopedStationIds.includes(device.stationId)) ||
+          Boolean(device.tankId && tankIds.has(device.tankId)) ||
+          Boolean(device.vehicleId && vehicleIds.has(device.vehicleId));
+        const assignmentsAllowed =
+          (!device.stationId || scopedStationIds.includes(device.stationId)) &&
+          (!device.tankId || tankIds.has(device.tankId)) &&
+          (!device.vehicleId || vehicleIds.has(device.vehicleId));
+        return hasAllowedStation && assignmentsAllowed;
+      })
+    : allDevices;
+  const vehicles = scopedStationIds !== undefined ? allVehicles.filter((vehicle) => vehicle.stationId && scopedStationIds.includes(vehicle.stationId)) : allVehicles;
 
   const fuelTypeById = new Map(fuelTypes.map((f) => [f.id, f]));
   const stationById = new Map(stations.map((s) => [s.id, s]));
@@ -280,8 +295,12 @@ export async function buildDashboard(
     .sort((a, b) => a.percent - b.percent)
     .slice(0, 12);
 
-  const stationScopeSql = scopedStationIds ? ` AND station_id IN (${scopedStationIds.map(() => "?").join(", ")})` : "";
-  const stationScopeParams = scopedStationIds ?? [];
+  const stationScopeSql = scopedStationIds === undefined
+    ? ""
+    : scopedStationIds.length === 0
+      ? " AND 1 = 0"
+      : ` AND station_id IN (${scopedStationIds.map(() => "?").join(", ")})`;
+  const stationScopeParams = scopedStationIds?.length ? scopedStationIds : [];
   const lossSeries = (await query<{ bucket: string; loss: number }>(
     `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', ts) AS bucket,
             COALESCE(SUM(CASE WHEN type = 'anomaly' THEN volume ELSE 0 END), 0) AS loss
@@ -523,7 +542,7 @@ export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30
 export async function buildStationDetail(stationId: string, period: "today" | "7d" | "30d" = "7d") {
   const station = (await getStation(stationId));
   if (!station) return null;
-  const tanks = (await listAllTanks(station.organizationId)).filter((t) => t.stationId === station.id);
+  const tanks = (await listAllTanks(station.organizationId, station.isArchived)).filter((t) => t.stationId === station.id);
   const fuelTypes = (await listFuelTypes(station.organizationId));
   const devices = (await listAllDevices(station.organizationId)).filter((d) => d.stationId === station.id);
   const range = rangeFor(period);
@@ -570,128 +589,169 @@ export interface SearchHit {
   score: number;
 }
 
-export async function globalSearch(orgId: string, term: string, limit = 12, stationIds?: string[]): Promise<SearchHit[]> {
+export async function globalSearch(
+  orgId: string,
+  term: string,
+  limit = 12,
+  stationIds?: string[],
+  allowedKinds: SearchHit["kind"][] = ["station", "tank", "device", "vehicle", "alert", "user", "report"],
+): Promise<SearchHit[]> {
   const q = term.trim().toLowerCase();
   if (q.length < 1) return [];
   const like = `%${q}%`;
-  const scopedStationIds = stationIds && stationIds.length > 0 ? stationIds : undefined;
-  const stationPlaceholders = scopedStationIds?.map(() => "?").join(", ");
+  const allowed = new Set(allowedKinds);
+  const scopedStationIds = stationIds;
+  const stationPlaceholders = scopedStationIds?.map(() => "?").join(", ") ?? "";
+  const stationClause = (column: string) => {
+    if (scopedStationIds === undefined) return { sql: "", params: [] as unknown[] };
+    if (scopedStationIds.length === 0) return { sql: " AND 1 = 0", params: [] as unknown[] };
+    return { sql: ` AND ${column} IN (${stationPlaceholders})`, params: [...scopedStationIds] as unknown[] };
+  };
   const hits: SearchHit[] = [];
 
-  const stations = (await query<Record<string, unknown>>(
-    `SELECT id, name, code, city, status FROM stations WHERE organization_id = ?${scopedStationIds ? ` AND id IN (${stationPlaceholders})` : ""} AND (name LIKE ? OR code LIKE ? OR city LIKE ?) LIMIT 6`,
-    scopedStationIds ? [orgId, ...scopedStationIds, like, like, like] : [orgId, like, like, like],
-  ));
-  for (const s of stations) {
-    hits.push({
-      id: String(s.id),
-      kind: "station",
-      title: String(s.name),
-      subtitle: `Station ${String(s.code)} · ${String(s.city)}`,
-      meta: String(s.status),
-      href: `/stations/${s.id}`,
-      score: 3,
-    });
+  if (allowed.has("station")) {
+    const scope = stationClause("s.id");
+    const stations = (await query<Record<string, unknown>>(
+      `SELECT s.id, s.name, s.code, s.city, s.status FROM stations s
+       WHERE s.organization_id = ?${scope.sql} AND (s.name LIKE ? OR s.code LIKE ? OR s.city LIKE ?) LIMIT 6`,
+      [orgId, ...scope.params, like, like, like],
+    ));
+    for (const s of stations) {
+      hits.push({ id: String(s.id), kind: "station", title: String(s.name), subtitle: `Station ${String(s.code)} · ${String(s.city)}`, meta: String(s.status), href: `/stations/${s.id}`, score: 3 });
+    }
   }
 
-  const tanks = (await query<Record<string, unknown>>(
-    `SELECT t.id, t.name, t.capacity, t.current_volume, s.name AS station_name, ft.system_name AS fuel
-     FROM tanks t JOIN stations s ON s.id = t.station_id JOIN fuel_types ft ON ft.id = t.fuel_type_id
-     WHERE t.organization_id = ?${scopedStationIds ? ` AND t.station_id IN (${stationPlaceholders})` : ""} AND (t.name LIKE ? OR t.code LIKE ? OR s.name LIKE ?) LIMIT 6`,
-    scopedStationIds ? [orgId, ...scopedStationIds, like, like, like] : [orgId, like, like, like],
-  ));
-  for (const t of tanks) {
-    const pct = Number(t.capacity) > 0 ? (Number(t.current_volume) / Number(t.capacity)) * 100 : 0;
-    hits.push({
-      id: String(t.id),
-      kind: "tank",
-      title: String(t.name),
-      subtitle: `${String(t.station_name)} · ${String(t.fuel)}`,
-      meta: `${Math.round(Number(t.current_volume)).toLocaleString()} L · ${pct.toFixed(0)}%`,
-      href: `/tanks/${t.id}`,
-      score: 3,
-    });
+  if (allowed.has("tank")) {
+    const scope = stationClause("t.station_id");
+    const tanks = (await query<Record<string, unknown>>(
+      `SELECT t.id, t.name, t.capacity, t.current_volume, s.name AS station_name, ft.system_name AS fuel
+       FROM tanks t JOIN stations s ON s.id = t.station_id JOIN fuel_types ft ON ft.id = t.fuel_type_id
+       WHERE t.organization_id = ?${scope.sql} AND t.is_archived = 0 AND (t.name LIKE ? OR t.code LIKE ? OR s.name LIKE ?) LIMIT 6`,
+      [orgId, ...scope.params, like, like, like],
+    ));
+    for (const t of tanks) {
+      const pct = Number(t.capacity) > 0 ? (Number(t.current_volume) / Number(t.capacity)) * 100 : 0;
+      hits.push({ id: String(t.id), kind: "tank", title: String(t.name), subtitle: `${String(t.station_name)} · ${String(t.fuel)}`, meta: `${Math.round(Number(t.current_volume)).toLocaleString()} L · ${pct.toFixed(0)}%`, href: `/tanks/${t.id}`, score: 3 });
+    }
   }
 
-  const devices = (await query<Record<string, unknown>>(
-    `SELECT id, serial_number, type, status, label FROM devices
-     WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (serial_number LIKE ? OR label LIKE ?) LIMIT 6`,
-    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
-  ));
-  for (const d of devices) {
-    hits.push({
-      id: String(d.id),
-      kind: "device",
-      title: String(d.serial_number),
-      subtitle: `${d.type === "fuel_probe" ? "Fuel probe" : "GPS tracker"}${d.label ? ` · ${String(d.label)}` : ""}`,
-      meta: String(d.status).replace("_", " "),
-      href: `/devices/${d.id}`,
-      score: 2,
-    });
+  if (allowed.has("device")) {
+    let deviceScope = "";
+    let deviceParams: unknown[] = [];
+    if (scopedStationIds !== undefined) {
+      if (scopedStationIds.length === 0) deviceScope = " AND 1 = 0";
+      else {
+        deviceScope = ` AND (
+          (d.station_id IS NULL OR d.station_id IN (${stationPlaceholders}))
+          AND (d.tank_id IS NULL OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (${stationPlaceholders})))
+          AND (d.vehicle_id IS NULL OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (${stationPlaceholders})))
+          AND (
+            d.station_id IN (${stationPlaceholders})
+            OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (${stationPlaceholders}))
+            OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (${stationPlaceholders}))
+          )
+        )`;
+        deviceParams = [
+          ...scopedStationIds,
+          orgId, ...scopedStationIds,
+          orgId, ...scopedStationIds,
+          ...scopedStationIds,
+          orgId, ...scopedStationIds,
+          orgId, ...scopedStationIds,
+        ];
+      }
+    }
+    const devices = (await query<Record<string, unknown>>(
+      `SELECT d.id, d.serial_number, d.type, d.status, d.label FROM devices d
+       WHERE d.organization_id = ?${deviceScope} AND d.is_active = 1 AND (d.serial_number LIKE ? OR d.label LIKE ?) LIMIT 6`,
+      [orgId, ...deviceParams, like, like],
+    ));
+    for (const d of devices) {
+      hits.push({ id: String(d.id), kind: "device", title: String(d.serial_number), subtitle: `${d.type === "fuel_probe" ? "Fuel probe" : "GPS tracker"}${d.label ? ` · ${String(d.label)}` : ""}`, meta: String(d.status).replace("_", " "), href: `/devices`, score: 2 });
+    }
   }
 
-  const vehicles = (await query<Record<string, unknown>>(
-    `SELECT id, name, plate_number, status FROM vehicles WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (name LIKE ? OR plate_number LIKE ?) LIMIT 4`,
-    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
-  ));
-  for (const v of vehicles) {
-    hits.push({
-      id: String(v.id),
-      kind: "vehicle",
-      title: String(v.name),
-      subtitle: `Vehicle · ${String(v.plate_number)}`,
-      meta: String(v.status),
-      href: `/vehicles/${v.id}`,
-      score: 2,
-    });
+  if (allowed.has("vehicle")) {
+    const scope = stationClause("v.station_id");
+    const vehicles = (await query<Record<string, unknown>>(
+      `SELECT v.id, v.name, v.plate_number, v.status FROM vehicles v
+       WHERE v.organization_id = ?${scope.sql} AND v.is_archived = 0 AND (v.name LIKE ? OR v.plate_number LIKE ?) LIMIT 4`,
+      [orgId, ...scope.params, like, like],
+    ));
+    for (const v of vehicles) {
+      hits.push({ id: String(v.id), kind: "vehicle", title: String(v.name), subtitle: `Vehicle · ${String(v.plate_number)}`, meta: String(v.status), href: `/vehicles`, score: 2 });
+    }
   }
 
-  const alerts = (await query<Record<string, unknown>>(
-    `SELECT id, title, severity, status, type FROM alerts WHERE organization_id = ?${scopedStationIds ? ` AND station_id IN (${stationPlaceholders})` : ""} AND (title LIKE ? OR message LIKE ?) LIMIT 4`,
-    scopedStationIds ? [orgId, ...scopedStationIds, like, like] : [orgId, like, like],
-  ));
-  for (const a of alerts) {
-    hits.push({
-      id: String(a.id),
-      kind: "alert",
-      title: String(a.title),
-      subtitle: `Alert · ${String(a.type).replace(/_/g, " ")}`,
-      meta: String(a.status),
-      href: `/alerts?highlight=${a.id}`,
-      score: 2,
-    });
+  if (allowed.has("alert")) {
+    const scope = stationClause("a.station_id");
+    const alerts = (await query<Record<string, unknown>>(
+      `SELECT a.id, a.title, a.severity, a.status, a.type FROM alerts a
+       WHERE a.organization_id = ?${scope.sql} AND (a.title LIKE ? OR a.message LIKE ?) LIMIT 4`,
+      [orgId, ...scope.params, like, like],
+    ));
+    for (const a of alerts) {
+      hits.push({ id: String(a.id), kind: "alert", title: String(a.title), subtitle: `Alert · ${String(a.type).replace(/_/g, " ")}`, meta: String(a.status), href: `/alerts?highlight=${a.id}`, score: 2 });
+    }
   }
 
-  const users = (await query<Record<string, unknown>>(
-    `SELECT id, name, email, job_title FROM users WHERE organization_id = ? AND (name LIKE ? OR email LIKE ?) LIMIT 4`,
-    [orgId, like, like],
-  ));
-  for (const u of users) {
-    hits.push({
-      id: String(u.id),
-      kind: "user",
-      title: String(u.name),
-      subtitle: `User · ${String(u.email)}`,
-      meta: String(u.job_title ?? ""),
-      href: `/admin/users?highlight=${u.id}`,
-      score: 1,
-    });
+  if (allowed.has("user")) {
+    let userScope = "";
+    let userParams: unknown[] = [];
+    if (scopedStationIds !== undefined) {
+      if (scopedStationIds.length === 0) userScope = " AND 1 = 0";
+      else {
+        userScope = ` AND ur.key NOT IN ('admin', 'super_admin', 'owner')
+          AND u.id IN (SELECT us.user_id FROM user_stations us WHERE us.station_id IN (${stationPlaceholders}))
+          AND NOT EXISTS (
+            SELECT 1 FROM user_stations us_out
+            WHERE us_out.user_id = u.id AND us_out.station_id NOT IN (${stationPlaceholders})
+          )`;
+        userParams = [...scopedStationIds, ...scopedStationIds];
+      }
+    }
+    const users = (await query<Record<string, unknown>>(
+      `SELECT u.id, u.name, u.email, u.job_title FROM users u JOIN roles ur ON ur.id = u.role_id
+       WHERE u.organization_id = ?${userScope} AND (u.name LIKE ? OR u.email LIKE ?) LIMIT 4`,
+      [orgId, ...userParams, like, like],
+    ));
+    for (const u of users) {
+      hits.push({ id: String(u.id), kind: "user", title: String(u.name), subtitle: `User · ${String(u.email)}`, meta: String(u.job_title ?? ""), href: `/admin/users?highlight=${u.id}`, score: 1 });
+    }
   }
 
-  const reports = (await query<Record<string, unknown>>(
-    `SELECT id, title, category, period FROM reports WHERE organization_id = ? AND title LIKE ? LIMIT 4`,
-    [orgId, like],
-  ));
-  for (const r of reports) {
-    hits.push({
-      id: String(r.id),
-      kind: "report",
-      title: String(r.title),
-      subtitle: `Report · ${String(r.category)}`,
-      meta: String(r.period),
-      href: `/reports/${r.id}`,
-      score: 1,
-    });
+  if (allowed.has("report")) {
+    const reports = await query<Record<string, unknown>>(
+      `SELECT r.id, r.title, r.category, r.period, r.filters FROM reports r
+       WHERE r.organization_id = ? AND r.title LIKE ? AND r.status != 'archived'
+       ORDER BY r.created_at DESC LIMIT 100`,
+      [orgId, like],
+    );
+    let matchedReports = 0;
+    for (const report of reports) {
+      if (scopedStationIds !== undefined) {
+        let filters: Record<string, unknown> = {};
+        try {
+          const parsed = JSON.parse(String(report.filters ?? "{}"));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) filters = parsed as Record<string, unknown>;
+        } catch {
+          continue;
+        }
+        const reportStationId = filters.stationId;
+        if (typeof reportStationId !== "string" || !scopedStationIds.includes(reportStationId)) continue;
+      }
+      hits.push({
+        id: String(report.id),
+        kind: "report",
+        title: String(report.title),
+        subtitle: `Report · ${String(report.category)}`,
+        meta: String(report.period),
+        href: `/reports/${report.id}`,
+        score: 1,
+      });
+      matchedReports += 1;
+      if (matchedReports >= 4) break;
+    }
   }
 
   return hits.sort((a, b) => b.score - a.score).slice(0, limit);

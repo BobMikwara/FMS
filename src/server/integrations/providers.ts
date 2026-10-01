@@ -47,8 +47,8 @@ function hmacEqual(a: string, b: string): boolean {
 
 function num(value: unknown): number | null {
   if (value == null || value === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value !== "number" && typeof value !== "string") return Number.NaN;
+  return Number(value);
 }
 
 function str(value: unknown): string | null {
@@ -96,7 +96,7 @@ const tectonic: DeviceProvider = {
     const volume = firstNumber(payload, ["volumeLiters", "volume_liters", "volume", "grossVolume"]);
     if (volume == null) return null;
     return {
-      ts: str(payload.timestamp ?? payload.ts ?? payload.readingAt) ?? new Date().toISOString(),
+      ts: str(payload.timestamp ?? payload.ts ?? payload.readingAt) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(payload, ["levelMm", "fuelHeightMm", "productLevelMm"]),
       levelPercent: firstNumber(payload, ["levelPercent", "percentFull", "fillPercent"]),
@@ -143,7 +143,7 @@ const veederRoot: DeviceProvider = {
     const volume = firstNumber(tank as Record<string, unknown>, ["volume", "grossVolume", "volumeLiters"]);
     if (volume == null) return null;
     return {
-      ts: str(tank.timestamp ?? payload.timestamp) ?? new Date().toISOString(),
+      ts: str(tank.timestamp ?? payload.timestamp) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(tank as Record<string, unknown>, ["level", "fuelHeight", "productLevel"]),
       levelPercent: firstNumber(tank as Record<string, unknown>, ["percentFull", "levelPercent"]),
@@ -188,7 +188,7 @@ const genericMqtt: DeviceProvider = {
     const volume = firstNumber(payload, ["volumeLiters", "volume_liters", "volume"]);
     if (volume == null) return null;
     return {
-      ts: str(payload.ts ?? payload.timestamp) ?? new Date().toISOString(),
+      ts: str(payload.ts ?? payload.timestamp) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(payload, ["levelMm", "level_mm"]),
       levelPercent: firstNumber(payload, ["levelPercent", "level_percent"]),
