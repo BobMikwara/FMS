@@ -21,6 +21,7 @@ interface TankRow {
   lastReadingAt: string | null;
   lowThresholdPct: number;
   criticalThresholdPct: number;
+  overfillThresholdPct: number;
   tankType: string;
   isArchived: boolean;
 }
@@ -92,6 +93,9 @@ export function StationTanks({
             color={row.color}
             volume={row.currentVolume}
             capacity={row.capacity}
+            lowThresholdPct={row.lowThresholdPct}
+            criticalThresholdPct={row.criticalThresholdPct}
+            overfillThresholdPct={row.overfillThresholdPct}
             size="sm"
             showHeader={false}
             status={row.status}
@@ -115,7 +119,7 @@ export function StationTanks({
       hideOnMobile: true,
       cell: (row) => (
         <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
-          {row.lowThresholdPct}% / {row.criticalThresholdPct}%
+          Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}% · Overfill {row.overfillThresholdPct}%
         </span>
       ),
     },

@@ -3,8 +3,9 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listAllStations, listFuelTypes } from "@/server/db/repo/stations";
+import { getOrganization } from "@/server/db/repo/core";
 import { PageHeader, Notice } from "@/components/ui/layout";
-import { isoDaysAgo } from "@/lib/utils";
+import { dayStartInTimeZone, normalizeTimeZone } from "@/server/services/time-zone";
 import { ReportForm } from "./report-form";
 
 export const dynamic = "force-dynamic";
@@ -13,11 +14,14 @@ export default async function NewReportPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const stations = (await listAllStations(user.organizationId)).filter(
-    (station) => userCanAccessStation(user, station.id),
-  );
-  const fuelTypes = (await listFuelTypes(user.organizationId));
-  const now = new Date().toISOString();
+  const [allStations, fuelTypes, organization] = await Promise.all([
+    listAllStations(user.organizationId),
+    listFuelTypes(user.organizationId),
+    getOrganization(user.organizationId),
+  ]);
+  const stations = allStations.filter((station) => userCanAccessStation(user, station.id));
+  const organizationTimeZone = normalizeTimeZone(organization?.timezone);
+  const now = new Date();
 
   return (
     <div className="space-y-5">
@@ -41,9 +45,10 @@ export default async function NewReportPage() {
       </Notice>
 
       <ReportForm
-        defaultFrom={isoDaysAgo(7)}
-        defaultTo={now}
-        stations={stations.map((station) => ({ id: station.id, name: station.name }))}
+        defaultFrom={dayStartInTimeZone(now, -7, organizationTimeZone).toISOString()}
+        defaultTo={now.toISOString()}
+        organizationTimeZone={organizationTimeZone}
+        stations={stations.map((station) => ({ id: station.id, name: station.name, timeZone: station.timezone }))}
         fuelTypes={fuelTypes.map((fuel) => ({ id: fuel.id, name: fuel.displayName }))}
         canExport={hasPermission(user, "reports.export")}
         canViewReports={hasPermission(user, "reports.view")}

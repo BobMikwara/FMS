@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { cn, formatDateTime, formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { cn, formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import {
   Badge,
   EmptyState,
@@ -14,7 +15,7 @@ import {
   useToast,
 } from "@/components/ui/feedback";
 import { Button } from "@/components/ui/button";
-import { Select } from "@/components/ui/form";
+import { Field, Input, Select } from "@/components/ui/form";
 import { Modal } from "@/components/ui/overlay";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { AreaChart, type Series } from "@/components/charts/charts";
@@ -23,6 +24,7 @@ import { FuelReplay } from "@/components/charts/fuel-replay";
 import { EventTypeBadge, ConfidenceBadge } from "@/components/domain/badges";
 import type { Tank, Station, FuelType, Device, Alert } from "@/server/domain/types";
 import { tankStateForPercent } from "@/lib/status";
+import { validateTankThresholds } from "@/lib/tank-thresholds";
 
 export interface TankDetailProps {
   tank: Tank;
@@ -33,13 +35,15 @@ export interface TankDetailProps {
   canViewReadings: boolean;
   canViewMovements: boolean;
   canViewDevices: boolean;
+  canEditTank: boolean;
   canAcknowledge: boolean;
   canResolve: boolean;
   canNote: boolean;
   detail: {
     fillPercent: number;
     remainingCapacity: number;
-    dataState: "live" | "delayed" | "stale" | "offline";
+    dataState: "live" | "delayed" | "stale" | "unknown" | "offline";
+    timeZone: string;
     todayConsumption: number | null;
     todayRefills: number | null;
     coverage: { avgDailyConsumption: number; daysRemaining: number | null } | null;
@@ -109,12 +113,21 @@ export function TankDetailClient({
   canViewReadings,
   canViewMovements,
   canViewDevices,
+  canEditTank,
   canAcknowledge,
   canResolve,
   canNote,
 }: TankDetailProps) {
   const [tab, setTab] = useState<TabId>("overview");
   const [noteOpen, setNoteOpen] = useState(false);
+  const [thresholdsOpen, setThresholdsOpen] = useState(false);
+  const [thresholdsSaving, setThresholdsSaving] = useState(false);
+  const [thresholds, setThresholds] = useState({
+    criticalThresholdPct: String(tank.criticalThresholdPct),
+    lowThresholdPct: String(tank.lowThresholdPct),
+    overfillThresholdPct: String(tank.overfillThresholdPct),
+  });
+  const [thresholdErrors, setThresholdErrors] = useState<Record<string, string>>({});
   const [noteBody, setNoteBody] = useState("");
   const [noteTarget, setNoteTarget] = useState<string>("");
   const [savingNote, setSavingNote] = useState(false);
@@ -135,7 +148,7 @@ export function TankDetailClient({
   const visualStatus: Tank["status"] =
     !latest && detail.dataState === "offline"
       ? "offline"
-      : tankStateForPercent(detail.fillPercent, tank.criticalThresholdPct, tank.lowThresholdPct);
+      : tankStateForPercent(detail.fillPercent, tank.criticalThresholdPct, tank.lowThresholdPct, tank.overfillThresholdPct);
 
   const chartSeries = useMemo<Series[]>(() => {
     if (detail.history.length < 2) return [];
@@ -229,6 +242,49 @@ export function TankDetailClient({
     }
   };
 
+  const openThresholdEditor = () => {
+    setThresholds({
+      criticalThresholdPct: String(tank.criticalThresholdPct),
+      lowThresholdPct: String(tank.lowThresholdPct),
+      overfillThresholdPct: String(tank.overfillThresholdPct),
+    });
+    setThresholdErrors({});
+    setThresholdsOpen(true);
+  };
+
+  const saveThresholds = async () => {
+    const values = {
+      criticalThresholdPct: Number(thresholds.criticalThresholdPct),
+      lowThresholdPct: Number(thresholds.lowThresholdPct),
+      overfillThresholdPct: Number(thresholds.overfillThresholdPct),
+    };
+    const validation = validateTankThresholds(values);
+    if (!validation.ok) {
+      setThresholdErrors(validation.errors);
+      return;
+    }
+    setThresholdsSaving(true);
+    try {
+      const response = await fetch(`/api/tanks/${tank.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(values),
+      });
+      const payload = await response.json();
+      if (!payload.ok) {
+        toast.error(payload.error?.message ?? "Could not save tank thresholds.");
+        return;
+      }
+      setThresholdsOpen(false);
+      toast.success("Tank thresholds saved", "Tank status and alerts use these values.");
+      window.location.reload();
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+    } finally {
+      setThresholdsSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-5">
       <div className="card p-5">
@@ -249,17 +305,24 @@ export function TankDetailClient({
             </div>
             <p className="mt-1.5 max-w-xl text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
               {state.note}{" "}
-              {latest ? `Last reading ${timeAgo(latest.ts)} (${formatDateTime(latest.ts)}).` : "No readings received yet."}
+              {latest ? `Last reading ${timeAgo(latest.ts)} (${formatDateTimeInTimeZone(latest.ts, detail.timeZone)} ${detail.timeZone}).` : "No readings received yet."}
             </p>
           </div>
-          <div className="text-right">
-            <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-[var(--ink-3)]">Measured volume</p>
-            <p className="text-num mt-1 text-[1.75rem] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">
-              {latest ? formatNumber(Math.round(latest.volumeLiters)) : "Not available"}
-            </p>
-            <p className="mt-1 text-[0.75rem] text-[var(--ink-2)]">
-              {latest ? `of ${formatNumber(Math.round(tank.capacity))} L usable` : "Awaiting first reading"}
-            </p>
+          <div className="flex flex-col items-end gap-3">
+            <div className="text-right">
+              <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-[var(--ink-3)]">Measured volume</p>
+              <p className="text-num mt-1 text-[1.75rem] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">
+                {latest ? formatNumber(Math.round(latest.volumeLiters)) : "Not available"}
+              </p>
+              <p className="mt-1 text-[0.75rem] text-[var(--ink-2)]">
+                {latest ? `of ${formatNumber(Math.round(tank.capacity))} L usable` : "Awaiting first reading"}
+              </p>
+            </div>
+            {canEditTank ? (
+              <Button size="sm" variant="secondary" onClick={openThresholdEditor}>
+                Edit thresholds
+              </Button>
+            ) : null}
           </div>
         </div>
 
@@ -275,6 +338,7 @@ export function TankDetailClient({
               status={visualStatus}
               lowThresholdPct={tank.lowThresholdPct}
               criticalThresholdPct={tank.criticalThresholdPct}
+              overfillThresholdPct={tank.overfillThresholdPct}
               dataState={detail.dataState}
               size="md"
               showMarkings
@@ -343,7 +407,7 @@ export function TankDetailClient({
               <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Level trend</h3>
-                <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Measured volume per bucket over the last 7 days.</p>
+                <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Measured volume over the last 7 days. Buckets use {detail.timeZone}.</p>
               </div>
               <Badge tone="neutral">{detail.history.length} points</Badge>
             </div>
@@ -424,9 +488,19 @@ export function TankDetailClient({
         </div>
       ) : null}
 
-      {tab === "readings" ? <ReadingsTable readings={detail.readings} /> : null}
-      {tab === "movements" ? <MovementsTable events={detail.events} /> : null}
-      {tab === "replay" ? <FuelReplay tankId={tank.id} tankName={tank.name} capacity={tank.capacity} /> : null}
+      {tab === "readings" ? <ReadingsTable readings={detail.readings} timeZone={detail.timeZone} /> : null}
+      {tab === "movements" ? <MovementsTable events={detail.events} timeZone={detail.timeZone} /> : null}
+      {tab === "replay" ? (
+        <FuelReplay
+          tankId={tank.id}
+          tankName={tank.name}
+          capacity={tank.capacity}
+          timeZone={detail.timeZone}
+          criticalThresholdPct={tank.criticalThresholdPct}
+          lowThresholdPct={tank.lowThresholdPct}
+          overfillThresholdPct={tank.overfillThresholdPct}
+        />
+      ) : null}
 
       {tab === "reconciliation" && detail.reconciliation ? (
         <section className="card p-5">
@@ -475,6 +549,60 @@ export function TankDetailClient({
           ackPending={ackId}
         />
       ) : null}
+
+      <Modal
+        open={thresholdsOpen}
+        onClose={() => setThresholdsOpen(false)}
+        title="Edit tank thresholds"
+        description="Status and low-fuel or overfill alerts use these saved values. Keep critical below low, and low below overfill."
+        size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setThresholdsOpen(false)}>
+              Cancel
+            </Button>
+            <Button loading={thresholdsSaving} onClick={saveThresholds}>
+              Save thresholds
+            </Button>
+          </>
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="Critical (%)" htmlFor="tank-critical" error={thresholdErrors.criticalThresholdPct}>
+            <Input
+              id="tank-critical"
+              type="number"
+              min={1}
+              max={100}
+              step={0.1}
+              value={thresholds.criticalThresholdPct}
+              onChange={(event) => setThresholds({ ...thresholds, criticalThresholdPct: event.target.value })}
+            />
+          </Field>
+          <Field label="Low (%)" htmlFor="tank-low" error={thresholdErrors.lowThresholdPct}>
+            <Input
+              id="tank-low"
+              type="number"
+              min={1}
+              max={100}
+              step={0.1}
+              value={thresholds.lowThresholdPct}
+              onChange={(event) => setThresholds({ ...thresholds, lowThresholdPct: event.target.value })}
+            />
+          </Field>
+          <Field label="Overfill (%)" htmlFor="tank-overfill" error={thresholdErrors.overfillThresholdPct}>
+            <Input
+              id="tank-overfill"
+              type="number"
+              min={50}
+              max={100}
+              step={0.1}
+              value={thresholds.overfillThresholdPct}
+              onChange={(event) => setThresholds({ ...thresholds, overfillThresholdPct: event.target.value })}
+            />
+          </Field>
+        </div>
+      </Modal>
 
       <Modal
         open={noteOpen}
@@ -531,21 +659,15 @@ function Tile({ label, value, tone, hint }: { label: string; value: string; tone
   );
 }
 
-function formatShortTime(iso: string) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
 /* -------------------------------------------------------------------------- */
 /* Readings table                                                             */
 /* -------------------------------------------------------------------------- */
 
 type ReadingRow = TankDetailProps["detail"]["readings"][number];
 
-function ReadingsTable({ readings }: { readings: ReadingRow[] }) {
+function ReadingsTable({ readings, timeZone }: { readings: ReadingRow[]; timeZone: string }) {
   const columns: Column<ReadingRow>[] = [
-    { key: "ts", header: "Timestamp (UTC)", cell: (row) => <span className="text-num text-[0.8125rem]">{formatDateTime(row.ts)}</span> },
+    { key: "ts", header: "Timestamp (station local time)", cell: (row) => <span className="text-num text-[0.8125rem]">{formatDateTimeInTimeZone(row.ts, timeZone)}</span> },
     {
       key: "volumeLiters",
       header: "Volume (L)",
@@ -592,12 +714,12 @@ function ReadingsTable({ readings }: { readings: ReadingRow[] }) {
 
 type EventRow = TankDetailProps["detail"]["events"][number];
 
-function MovementsTable({ events }: { events: EventRow[] }) {
+function MovementsTable({ events, timeZone }: { events: EventRow[]; timeZone: string }) {
   const [filter, setFilter] = useState("all");
   const rows = filter === "all" ? events : events.filter((event) => event.type === filter);
 
   const columns: Column<EventRow>[] = [
-    { key: "ts", header: "Timestamp", cell: (row) => <span className="text-num text-[0.8125rem]">{formatDateTime(row.ts)}</span> },
+    { key: "ts", header: "Timestamp (station local time)", cell: (row) => <span className="text-num text-[0.8125rem]">{formatDateTimeInTimeZone(row.ts, timeZone)}</span> },
     { key: "type", header: "Movement", cell: (row) => <EventTypeBadge type={row.type} /> },
     {
       key: "volume",
@@ -768,5 +890,3 @@ function AlertsTable({
 function statusLabel(status: Tank["status"]) {
   return status === "full" ? "Full" : status === "normal" ? "Normal" : status === "low" ? "Low" : status === "critical" ? "Critical" : "Offline";
 }
-
-export { formatShortTime };

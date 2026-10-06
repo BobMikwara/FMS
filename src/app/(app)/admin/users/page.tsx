@@ -31,7 +31,6 @@ export default async function UsersPage() {
     roleId: entry.roleId,
     roleName: entry.roleName,
     roleKey: entry.roleKey,
-    mfaEnabled: entry.mfaEnabled,
     lastLoginAt: entry.lastLoginAt,
     lastLoginIp: entry.lastLoginIp,
     createdAt: entry.createdAt,

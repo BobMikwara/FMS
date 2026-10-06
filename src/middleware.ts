@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
 const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password"];
-const PUBLIC_API = ["/api/auth/login", "/api/auth/forgot-password", "/api/auth/reset-password", "/api/webhooks/", "/api/cron/", "/api/health"];
+const PUBLIC_API = ["/api/auth/login", "/api/auth/mfa/login", "/api/auth/forgot-password", "/api/auth/reset-password", "/api/webhooks/", "/api/cron/", "/api/health"];
 const COOKIE = "smartfuel_session";
 
 function getSecret(): Uint8Array {

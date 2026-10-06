@@ -122,6 +122,9 @@ export function TanksBrowser({
               color={fuelColors[row.fuelTypeId] ?? FUEL_COLOR_FALLBACK[row.fuelTypeId] ?? "#0f766e"}
               volume={row.currentVolume}
               capacity={row.capacity}
+              lowThresholdPct={row.lowThresholdPct}
+              criticalThresholdPct={row.criticalThresholdPct}
+              overfillThresholdPct={row.overfillThresholdPct}
               size="sm"
               showHeader={false}
               status={row.status}
@@ -169,7 +172,7 @@ export function TanksBrowser({
         hideOnMobile: true,
         cell: (row) => (
           <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
-            Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}%
+            Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}% · Overfill {row.overfillThresholdPct}%
           </span>
         ),
       },
@@ -250,6 +253,7 @@ export function TanksBrowser({
             { header: "Water (mm)", value: (row) => row.waterLevelMm ?? "" },
             { header: "Low threshold (%)", value: (row) => row.lowThresholdPct },
             { header: "Critical threshold (%)", value: (row) => row.criticalThresholdPct },
+            { header: "Overfill threshold (%)", value: (row) => row.overfillThresholdPct },
             { header: "Last reading", value: (row) => row.lastReadingAt ?? "" },
           ]}
         />

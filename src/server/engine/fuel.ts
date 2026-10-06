@@ -11,8 +11,10 @@ import { insertReadingOnce, latestReadingForTank, readingForDeviceAt } from "../
 import { getDevice, getDeviceBySerial, getVehicle, lockDeviceForUpdate, updateDevice } from "../db/repo/devices";
 import { getTank, getStation, lockTankForUpdate, updateTank } from "../db/repo/stations";
 import { getOrganization, getSetting, getSettings } from "../db/repo/core";
-import { createNotification } from "../db/repo/core";
+import { dispatchStationNotification, notifyAlert } from "../services/notification-dispatch";
+import { resolveOperationalEngineSettings } from "../domain/system-config";
 import type { Alert, AlertRule, Device, Reading, Tank } from "../domain/types";
+import { dayStartInTimeZone, minuteOfDayInTimeZone } from "../services/time-zone";
 
 /**
  * Device Integration Layer + Fuel Monitoring Engine.
@@ -83,9 +85,16 @@ const DEFAULT_CONFIG: EngineConfig = {
 };
 
 async function loadConfig(orgId: string): Promise<EngineConfig> {
-  const settings = (await getSettings(orgId));
+  const settings = await getSettings(orgId);
   const stored = (settings.engine ?? {}) as Partial<EngineConfig>;
-  return { ...DEFAULT_CONFIG, ...stored };
+  const operational = resolveOperationalEngineSettings(settings);
+  return {
+    ...DEFAULT_CONFIG,
+    ...stored,
+    deviceOfflineMinutes: operational.deviceOfflineMinutes,
+    deviceDelayedSeconds: operational.deviceDelayedSeconds,
+    reconciliationVariancePct: operational.reconciliationVariancePct,
+  };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -167,8 +176,11 @@ export function validateReading(tank: Tank, reading: NormalizedReading): Validat
 /* Operating hours                                                            */
 /* -------------------------------------------------------------------------- */
 
-export function isWithinOperatingHours(station: { openingTime: string; closingTime: string }, at: Date): boolean {
-  const minutes = at.getHours() * 60 + at.getMinutes();
+export function isWithinOperatingHours(
+  station: { openingTime: string; closingTime: string; timezone?: string },
+  at: Date,
+): boolean {
+  const minutes = minuteOfDayInTimeZone(at, station.timezone ?? "Africa/Dar_es_Salaam");
   const toMinutes = (hhmm: string) => {
     const [h, m] = hhmm.split(":").map((v) => Number(v));
     return (h || 0) * 60 + (m || 0);
@@ -434,7 +446,7 @@ async function ingestReadingInTransaction(options: IngestOptions): Promise<Inges
     currentTempC: normalizedReading.temperatureC ?? tank.currentTempC,
     currentLevelMm: normalizedReading.levelMm ?? tank.currentLevelMm,
     waterLevelMm: normalizedReading.waterLevelMm ?? tank.waterLevelMm,
-    status: tankStatusFromPercent(levelPercent),
+    status: tankStatusFromPercent(levelPercent, tank),
   };
   (await updateTank(tank.id, tankPatch));
 
@@ -515,13 +527,7 @@ function sameTelemetry(
 
 async function createAlertAndNotify(input: Parameters<typeof createAlert>[0]): Promise<Alert> {
   const alert = await createAlert(input);
-  await createNotification({
-    organizationId: input.organizationId,
-    alertId: alert.id,
-    title: alert.title,
-    body: alert.message,
-    severity: alert.severity,
-  });
+  await notifyAlert(alert);
   return alert;
 }
 
@@ -529,10 +535,13 @@ async function createAlertAndNotify(input: Parameters<typeof createAlert>[0]): P
 /* Alert evaluation                                                           */
 /* -------------------------------------------------------------------------- */
 
-function tankStatusFromPercent(percent: number): Tank["status"] {
-  if (percent >= 95) return "full";
-  if (percent < 10) return "critical";
-  if (percent < 20) return "low";
+export function tankStatusFromPercent(
+  percent: number,
+  tank: Pick<Tank, "criticalThresholdPct" | "lowThresholdPct" | "overfillThresholdPct">,
+): Tank["status"] {
+  if (percent >= tank.overfillThresholdPct) return "full";
+  if (percent < tank.criticalThresholdPct) return "critical";
+  if (percent < tank.lowThresholdPct) return "low";
   return "normal";
 }
 
@@ -672,7 +681,7 @@ async function evaluateTankAlerts(args: EvaluateArgs): Promise<Alert[]> {
       }
       case "high_fuel":
       case "overfill": {
-        const fallback = rule.type === "overfill" ? tank.overfillThresholdPct : 95;
+        const fallback = tank.overfillThresholdPct;
         const threshold = ruleNumber(rule, ["percent"], fallback);
         if (isAboveThreshold(levelPercent, threshold, condition.operator)) {
           await pushConfigured(rule, {
@@ -1021,31 +1030,34 @@ async function notifyEvent(
   event: { id: string; type: string; volume: number; delta: number },
   levelPercent: number,
 ): Promise<void> {
-  const station = (await getStation(tank.stationId));
+  const station = await getStation(tank.stationId);
   const stationName = station?.name ?? "Unknown station";
-  // Notifications have no event foreign key; this namespaced context keeps the
-  // existing schema usable for station-filtered feeds without adding a column.
+  const common = {
+    organizationId: tank.organizationId,
+    stationId: tank.stationId,
+    alertId: `event:${event.id}`,
+    idempotencyKey: `fuel-event:${event.id}`,
+    channels: ["in_app"],
+  };
   if (event.type === "anomaly") {
     const isPossibleLoss = event.delta < 0;
-    (await createNotification({
-      organizationId: tank.organizationId,
-      alertId: `event:${event.id}`,
+    await dispatchStationNotification({
+      ...common,
       title: isPossibleLoss ? `Suspected fuel loss: ${tank.name}` : `Unusual fuel increase: ${tank.name}`,
       body: isPossibleLoss
         ? `${Math.round(event.volume)} L unexplained decrease at ${stationName}. Review this event before concluding there was a loss.`
         : `${Math.round(event.volume)} L unexplained increase at ${stationName}. Verify whether a delivery was recorded.`,
       severity: isPossibleLoss ? "critical" : "warning",
-    }));
+    });
     return;
   }
   if (event.type === "refill") {
-    (await createNotification({
-      organizationId: tank.organizationId,
-      alertId: `event:${event.id}`,
+    await dispatchStationNotification({
+      ...common,
       title: `Refill detected — ${tank.name}`,
       body: `+${Math.round(event.volume).toLocaleString()} L received at ${stationName}. Tank now ${levelPercent.toFixed(0)}% full.`,
       severity: "info",
-    }));
+    });
   }
 }
 
@@ -1083,9 +1095,24 @@ function ruleTargetsDevice(
   }
 }
 
+export function recoveryAlertTypeForDevice(type: Device["type"]): "probe_offline" | "gps_offline" {
+  return type === "fuel_probe" ? "probe_offline" : "gps_offline";
+}
+
+export function isDeviceFreshForRecovery(
+  lastSeenAt: string | null | undefined,
+  offlineTimeoutMinutes: number,
+  now = Date.now(),
+): boolean {
+  if (!lastSeenAt) return false;
+  const timestamp = Date.parse(lastSeenAt);
+  if (!Number.isFinite(timestamp)) return false;
+  const age = now - timestamp;
+  return age >= 0 && age <= Math.max(0, offlineTimeoutMinutes) * 60_000;
+}
+
 async function sweepDeviceHealthInTransaction(orgId: string): Promise<{ offline: number; restored: number }> {
-  const settings = await getSettings(orgId);
-  const config = { ...DEFAULT_CONFIG, ...((settings.engine ?? {}) as Partial<EngineConfig>) };
+  const config = await loadConfig(orgId);
   const rules = await listEnabledRules(orgId);
   const offlineRules = rules.filter((rule) => rule.type === "probe_offline" || rule.type === "gps_offline");
   const ruleThresholds = offlineRules.map((rule) => Math.max(1, ruleNumber(rule, ["minutes"], config.deviceOfflineMinutes)));
@@ -1094,8 +1121,14 @@ async function sweepDeviceHealthInTransaction(orgId: string): Promise<{ offline:
 
   // A never-connected device gets the full outage grace period from registration
   // before it is marked offline; it is not treated as failed on creation.
+  // Trackers are health-monitored only after at least one valid GPS fix has
+  // been stored. A newly configured tracker without telemetry is not declared
+  // offline from its registration timestamp alone.
   const stale = await query<Record<string, unknown>>(
     `SELECT * FROM devices WHERE organization_id = ? AND is_active = 1
+       AND (type = 'fuel_probe' OR (type = 'gps_tracker' AND EXISTS (
+         SELECT 1 FROM vehicle_positions vp WHERE vp.device_id = devices.id
+       )))
        AND ((last_seen_at IS NULL AND created_at < ?) OR (last_seen_at IS NOT NULL AND last_seen_at < ?))`,
     [orgId, thresholdIso, thresholdIso],
   );
@@ -1191,7 +1224,10 @@ async function sweepDeviceHealthInTransaction(orgId: string): Promise<{ offline:
   // Auto-restore: any active device that has reported recently is brought back online.
   const restored = await query<{ id: string }>(
     `SELECT id FROM devices WHERE organization_id = ? AND is_active = 1 AND status = 'offline'
-       AND last_seen_at IS NOT NULL AND last_seen_at >= ?`,
+       AND last_seen_at IS NOT NULL AND last_seen_at >= ?
+       AND (type = 'fuel_probe' OR (type = 'gps_tracker' AND EXISTS (
+         SELECT 1 FROM vehicle_positions vp WHERE vp.device_id = devices.id
+       )))`,
     [orgId, thresholdIso],
   );
   let restoredCount = 0;
@@ -1200,17 +1236,16 @@ async function sweepDeviceHealthInTransaction(orgId: string): Promise<{ offline:
     await lockDeviceForUpdate(deviceId);
     const device = await getDevice(deviceId);
     if (!device || !device.isActive || device.status !== "offline") continue;
-    const lastSeen = device.lastSeenAt ? new Date(device.lastSeenAt).getTime() : Number.NaN;
-    if (!Number.isFinite(lastSeen) || Date.now() - lastSeen > config.deviceOfflineMinutes * 60_000) continue;
+    if (!isDeviceFreshForRecovery(device.lastSeenAt, config.deviceOfflineMinutes)) continue;
     await updateDevice(device.id, { status: "online" });
     if (device.tankId) {
       const tank = await getTank(device.tankId);
       if (tank) {
         const percent = tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0;
-        await updateTank(tank.id, { status: tankStatusFromPercent(percent) });
+        await updateTank(tank.id, { status: tankStatusFromPercent(percent, tank) });
       }
     }
-    await resolveAlertsOfType(device.id, device.type === "fuel_probe" ? "probe_offline" : "gps_offline", "Device communication restored");
+    await resolveAlertsOfType(device.id, recoveryAlertTypeForDevice(device.type), "Device communication restored");
     restoredCount += 1;
   }
 
@@ -1289,13 +1324,18 @@ export async function reconcileTank(
 /* Stock coverage (PRD §38)                                                   */
 /* -------------------------------------------------------------------------- */
 
-export async function stockCoverage(tankId: string, days = 7): Promise<{ avgDailyConsumption: number; daysRemaining: number | null }> {
-  const from = new Date(Date.now() - days * 86_400_000).toISOString();
+export async function stockCoverage(
+  tankId: string,
+  days = 7,
+  timeZone = "Africa/Dar_es_Salaam",
+): Promise<{ avgDailyConsumption: number; daysRemaining: number | null }> {
+  const windowDays = Math.max(1, Math.floor(days));
+  const from = dayStartInTimeZone(new Date(), -(windowDays - 1), timeZone).toISOString();
   const row = (await queryOne<Record<string, number>>(
     `SELECT COALESCE(SUM(volume), 0) AS total FROM fuel_events WHERE tank_id = ? AND type = 'consumption' AND ts >= ?`,
     [tankId, from],
   ));
-  const avgDaily = Number(row?.total ?? 0) / days;
+  const avgDaily = Number(row?.total ?? 0) / windowDays;
   const tank = (await getTank(tankId));
   if (!tank || avgDaily <= 0) return { avgDailyConsumption: avgDaily, daysRemaining: null };
   return { avgDailyConsumption: avgDaily, daysRemaining: tank.currentVolume / avgDaily };

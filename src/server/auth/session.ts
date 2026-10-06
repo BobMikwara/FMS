@@ -12,6 +12,8 @@ import {
   listUsers,
   updateUser,
 } from "../db/repo/core";
+import { createMfaLoginChallenge, sessionVersion } from "../db/repo/security";
+import { generateLoginChallengeToken, loginChallengeHash } from "./mfa-crypto";
 
 // Session identity + permission predicates live in a dependency-free module so
 // client components can import them without pulling in `next/headers`.
@@ -58,6 +60,7 @@ export function sessionMaxAge(): number {
 }
 
 export async function createSessionToken(payload: SessionPayload): Promise<string> {
+  const currentSessionVersion = payload.sessionVersion ?? await sessionVersion(payload.sub);
   return new SignJWT({
     email: payload.email,
     name: payload.name,
@@ -65,6 +68,7 @@ export async function createSessionToken(payload: SessionPayload): Promise<strin
     roleId: payload.roleId,
     roleKey: payload.roleKey,
     permissions: payload.permissions,
+    sv: currentSessionVersion,
   })
     .setProtectedHeader({ alg: ALG })
     .setSubject(payload.sub)
@@ -91,6 +95,7 @@ export async function verifySessionToken(token: string): Promise<SessionPayload 
       roleId: String(payload.roleId ?? ""),
       roleKey: String(payload.roleKey ?? ""),
       permissions: Array.isArray(payload.permissions) ? (payload.permissions as string[]) : [],
+      sessionVersion: Number.isSafeInteger(payload.sv) ? Number(payload.sv) : 0,
     };
   } catch {
     return null;
@@ -128,10 +133,13 @@ export async function readSessionCookie(): Promise<SessionPayload | null> {
 export async function getCurrentUser(): Promise<SessionUser | null> {
   const payload = await readSessionCookie();
   if (!payload) return null;
-  const user = (await getUser(payload.sub));
-  const organization = (await getOrganization(payload.orgId));
+  const [user, organization, currentSessionVersion] = await Promise.all([
+    getUser(payload.sub),
+    getOrganization(payload.orgId),
+    sessionVersion(payload.sub),
+  ]);
   if (!user || user.status !== "active") return null;
-  if (!organization) return null;
+  if (!organization || (payload.sessionVersion ?? 0) !== currentSessionVersion) return null;
   return {
     id: user.id,
     email: user.email,
@@ -154,6 +162,8 @@ export interface LoginResult {
   ok: boolean;
   error?: string;
   user?: SessionUser;
+  mfaRequired?: boolean;
+  challengeToken?: string;
 }
 
 const MAX_FAILED_ATTEMPTS = 6;
@@ -173,6 +183,9 @@ export async function authenticate(email: string, password: string, ip?: string)
     return { ok: false, error: `Account locked after too many failed attempts. Try again in ${minutes} minute(s).` };
   }
 
+  if (record.status === "invited") {
+    return { ok: false, error: "This account has not been activated. Follow the one-time activation link or ask an administrator to resend it." };
+  }
   if (record.status !== "active") {
     return { ok: false, error: "This account has been suspended. Contact your administrator." };
   }
@@ -188,12 +201,23 @@ export async function authenticate(email: string, password: string, ip?: string)
     return { ok: false, error: "Incorrect email or password." };
   }
 
-    (await updateUser(record.id, {
-      failedAttempts: 0,
-      lockedUntil: null,
-      lastLoginAt: new Date().toISOString(),
-      lastLoginIp: ip ?? undefined,
-    }));
+  if (record.mfaEnabled) {
+    await updateUser(record.id, { failedAttempts: 0, lockedUntil: null });
+    const challengeToken = generateLoginChallengeToken();
+    await createMfaLoginChallenge(
+      record.id,
+      loginChallengeHash(challengeToken),
+      new Date(Date.now() + 5 * 60_000).toISOString(),
+    );
+    return { ok: true, mfaRequired: true, challengeToken };
+  }
+
+  await updateUser(record.id, {
+    failedAttempts: 0,
+    lockedUntil: null,
+    lastLoginAt: new Date().toISOString(),
+    lastLoginIp: ip ?? undefined,
+  });
 
   const organization = (await getOrganization(record.organizationId));
   const user: SessionUser = {
@@ -215,13 +239,28 @@ export async function authenticate(email: string, password: string, ip?: string)
 /* Password reset                                                             */
 /* -------------------------------------------------------------------------- */
 
+async function issueAccountToken(userId: string, expiresInMs: number): Promise<string> {
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  await createResetToken(userId, tokenHash, new Date(Date.now() + expiresInMs).toISOString());
+  return token;
+}
+
 export async function requestPasswordReset(email: string): Promise<{ token: string; user: Pick<User, "email" | "name"> } | null> {
   const record = (await getUserByEmail(email.trim().toLowerCase()));
   if (!record) return null;
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = createHash("sha256").update(token).digest("hex");
-  (await createResetToken(record.id, tokenHash, new Date(Date.now() + 60 * 60 * 1000).toISOString()));
+  const token = await issueAccountToken(record.id, 60 * 60 * 1000);
   return { token, user: { email: record.email, name: record.name } };
+}
+
+export async function createInvitationToken(userId: string): Promise<{
+  token: string;
+  user: Pick<User, "email" | "name">;
+} | null> {
+  const user = await getUser(userId);
+  if (!user || user.status !== "invited") return null;
+  const token = await issueAccountToken(user.id, 24 * 60 * 60 * 1000);
+  return { token, user: { email: user.email, name: user.name } };
 }
 
 export async function completePasswordReset(token: string, newPassword: string): Promise<{ ok: boolean; error?: string }> {
@@ -229,9 +268,16 @@ export async function completePasswordReset(token: string, newPassword: string):
   const userId = (await consumeResetToken(tokenHash));
   if (!userId) return { ok: false, error: "This reset link is invalid or has expired." };
   const user = (await getUser(userId));
-  if (!user) return { ok: false, error: "This reset link is invalid or has expired." };
+  if (!user || user.status === "suspended") {
+    return { ok: false, error: "This reset link is invalid or has expired." };
+  }
   const passwordHash = await hashPassword(newPassword);
-  (await updateUser(userId, { passwordHash, failedAttempts: 0, lockedUntil: null }));
+  (await updateUser(userId, {
+    passwordHash,
+    failedAttempts: 0,
+    lockedUntil: null,
+    ...(user.status === "invited" ? { status: "active" as const } : {}),
+  }));
   return { ok: true };
 }
 

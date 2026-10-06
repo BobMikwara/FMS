@@ -1,7 +1,7 @@
 import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { Building2, Fuel, Bell, Sliders } from "lucide-react";
+import { Building2, Fuel, Bell, Sliders, KeyRound } from "lucide-react";
 import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { getOrganization } from "@/server/db/repo/core";
 import { listAllStations } from "@/server/db/repo/stations";
@@ -30,6 +30,12 @@ const SECTIONS = [
     description: "Who receives which alerts, on which channel, and how often digests are sent.",
   },
   {
+    href: "/settings/security",
+    icon: KeyRound,
+    title: "Account security",
+    description: "Set up authenticator sign-in, review remaining recovery codes and revoke active sessions.",
+  },
+  {
     href: "/settings/system",
     icon: Sliders,
     title: "System",
@@ -44,6 +50,7 @@ export default async function SettingsPage() {
   const organization = (await getOrganization(user.organizationId));
   const visibleSections = SECTIONS.filter((section) =>
     section.href === "/settings" ||
+    section.href === "/settings/security" ||
     (section.href === "/settings/fuel-types" && hasPermission(user, "fuel_types.manage")) ||
     (["/settings/notifications", "/settings/system"].includes(section.href) && hasPermission(user, "settings.manage")),
   );

@@ -2,10 +2,13 @@ import { stationScopeForUser, userCanAccessStationScopedUser } from "@/server/au
 import Link from "next/link";
 import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listReports, listScheduledReports } from "@/server/db/repo/reports";
-import { listUsers } from "@/server/db/repo/core";
+import { getOrganization, listUsers } from "@/server/db/repo/core";
+import { listAllStations } from "@/server/db/repo/stations";
+import { normalizeTimeZone } from "@/server/services/time-zone";
 import { PageHeader } from "@/components/ui/layout";
 import { Badge } from "@/components/ui/feedback";
-import { formatDateTime, timeAgo } from "@/lib/utils";
+import { timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { ReportsBrowser } from "./reports-browser";
 
 export const dynamic = "force-dynamic";
@@ -25,31 +28,49 @@ export default async function ReportsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const reports = (await listReports({ orgId: user.organizationId, pageSize: 50, stationIds: stationScopeForUser(user) })).rows;
-  const scheduled = (await listScheduledReports(user.organizationId, stationScopeForUser(user)));
-  const users = (await listUsers(user.organizationId, stationScopeForUser(user)))
-    .filter((entry) => userCanAccessStationScopedUser(user, entry.stationIds, entry.roleKey));
-  const authorName = new Map(users.map((entry) => [entry.id, entry.name]));
+  const [reportResult, scheduled, users, stations, organization] = await Promise.all([
+    listReports({ orgId: user.organizationId, pageSize: 50, stationIds: stationScopeForUser(user) }),
+    listScheduledReports(user.organizationId, stationScopeForUser(user)),
+    listUsers(user.organizationId, stationScopeForUser(user)),
+    listAllStations(user.organizationId),
+    getOrganization(user.organizationId),
+  ]);
+  const reports = reportResult.rows;
+  const scopedUsers = users.filter((entry) => userCanAccessStationScopedUser(user, entry.stationIds, entry.roleKey));
+  const authorName = new Map(scopedUsers.map((entry) => [entry.id, entry.name]));
+  const stationById = new Map(stations.map((station) => [station.id, station]));
+  const organizationTimeZone = normalizeTimeZone(organization?.timezone);
 
-  const rows = reports.map((report) => ({
-    id: report.id,
-    title: report.title,
-    category: report.category,
-    period: report.period,
-    dateFrom: report.dateFrom,
-    dateTo: report.dateTo,
-    status: report.status,
-    format: report.format,
-    fileUrl: hasPermission(user, "reports.export") ? report.fileUrl : null,
-    createdAt: report.createdAt,
-    authorName: authorName.get(report.createdById) ?? "Unknown",
-  }));
+  const rows = reports.map((report) => {
+    const selectedStationId = report.filters.stationId;
+    const storedTimeZone = report.filters.timeZone;
+    const timeZone = typeof storedTimeZone === "string" && storedTimeZone.trim()
+      ? normalizeTimeZone(storedTimeZone, organizationTimeZone)
+      : normalizeTimeZone(
+          typeof selectedStationId === "string" ? stationById.get(selectedStationId)?.timezone : undefined,
+          organizationTimeZone,
+        );
+    return {
+      id: report.id,
+      title: report.title,
+      category: report.category,
+      period: report.period,
+      dateFrom: report.dateFrom,
+      dateTo: report.dateTo,
+      timeZone,
+      status: report.status,
+      format: report.format,
+      fileUrl: hasPermission(user, "reports.export") ? report.fileUrl : null,
+      createdAt: report.createdAt,
+      authorName: authorName.get(report.createdById) ?? "Unknown",
+    };
+  });
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Reports"
-        description="Generate daily, weekly, monthly or custom reports and export them as PDF, Excel or CSV. Scheduled reports are delivered automatically."
+        description="Generate reports on demand and export them as PDF, Excel or CSV. Saved schedules are retained but are not executed automatically."
         actions={hasPermission(user, "reports.schedule") || hasPermission(user, "reports.create") ? (
           <div className="flex items-center gap-2">
             {hasPermission(user, "reports.schedule") ? (
@@ -72,7 +93,7 @@ export default async function ReportsPage() {
             <div>
               <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Scheduled reports</h2>
               <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
-                {scheduled.filter((entry) => entry.isEnabled).length} of {scheduled.length} active.
+                {scheduled.length} saved. Automatic execution and delivery are unavailable.
               </p>
             </div>
             {hasPermission(user, "reports.schedule") ? (
@@ -86,14 +107,14 @@ export default async function ReportsPage() {
               <li key={entry.id} className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3.5">
                 <div className="flex items-start justify-between gap-2">
                   <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{entry.name}</p>
-                  <Badge tone={entry.isEnabled ? "ok" : "neutral"}>{entry.isEnabled ? "Active" : "Paused"}</Badge>
+                  <Badge tone="neutral">Not running</Badge>
                 </div>
                 <p className="mt-1.5 text-[0.75rem] text-[var(--ink-3)]">
                   {CATEGORY_LABELS[entry.category] ?? entry.category} · {entry.period} · {entry.format.toUpperCase()}
                 </p>
                 <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">
-                  {entry.nextRunAt ? `Next run ${timeAgo(entry.nextRunAt)}` : "Next run not scheduled"}
-                  {entry.lastRunAt ? ` · last ${timeAgo(entry.lastRunAt)}` : ""}
+                  {entry.lastRunAt ? `Last recorded run ${timeAgo(entry.lastRunAt)}` : "No execution history"}
+                  {entry.isEnabled ? " · configured, but not executing" : " · paused configuration"}
                 </p>
               </li>
             ))}
@@ -108,7 +129,7 @@ export default async function ReportsPage() {
       />
 
       <p className="text-[0.6875rem] text-[var(--ink-3)]">
-        Report timestamps are shown in UTC. {reports.length > 0 ? `Latest generated ${formatDateTime(rows[0].createdAt)}.` : ""}
+        Period dates use each report’s saved time zone. {reports.length > 0 ? `Latest generated ${formatDateTimeInTimeZone(rows[0].createdAt, organizationTimeZone)} (${organizationTimeZone}).` : ""}
       </p>
     </div>
   );

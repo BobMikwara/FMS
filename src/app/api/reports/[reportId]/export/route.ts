@@ -1,6 +1,7 @@
 import { stationScopeForUser } from "@/server/auth/authorization";
 import { getReport } from "@/server/db/repo/reports";
-import { buildReportTable, reportStationIsAllowed } from "@/server/services/report-builder";
+import { buildReportTable, reportStationIsAllowed, resolveReportTimeZone } from "@/server/services/report-builder";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { toCsv } from "@/lib/export";
 import { audit, jsonError, notFound, withPermission } from "@/server/api/route";
 
@@ -18,6 +19,15 @@ const EXTENSION: Record<string, string> = {
   pdf: "html",
 };
 
+function escapeHtml(value: unknown): string {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 /**
  * Streams a generated report file. The dataset is built from the same read
  * models the application uses, so the download always matches what the preview
@@ -31,7 +41,10 @@ export const GET = withPermission("reports.export", async (request, ctx) => {
 
     const requested = new URL(request.url).searchParams.get("format") ?? report.format;
     const format = MIME[requested] ? requested : "csv";
-    const table = (await buildReportTable(report, stationScopeForUser(ctx.user)));
+    const [table, timeZone] = await Promise.all([
+      buildReportTable(report, stationScopeForUser(ctx.user)),
+      resolveReportTimeZone(report),
+    ]);
 
     const filename = `${report.title.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "report"}-${report.id}.${EXTENSION[format]}`;
     let body: string;
@@ -39,18 +52,12 @@ export const GET = withPermission("reports.export", async (request, ctx) => {
     if (format === "csv") {
       body = toCsv(table.headers, table.rows);
     } else if (format === "excel") {
-      const escape = (value: unknown) =>
-        String(value ?? "")
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;")
-          .replace(/>/g, "&gt;")
-          .replace(/"/g, "&quot;");
-      const cells = table.headers.map((header) => `<Cell><Data ss:Type="String">${escape(header)}</Data></Cell>`).join("");
+      const cells = table.headers.map((header) => `<Cell><Data ss:Type="String">${escapeHtml(header)}</Data></Cell>`).join("");
       const rows = table.rows
         .map(
           (row) =>
             `<Row>${row
-              .map((cell) => `<Cell><Data ss:Type="String">${escape(cell)}</Data></Cell>`)
+              .map((cell) => `<Cell><Data ss:Type="String">${escapeHtml(cell)}</Data></Cell>`)
               .join("")}</Row>`,
         )
         .join("");
@@ -65,14 +72,14 @@ export const GET = withPermission("reports.export", async (request, ctx) => {
       // PDF is served as a print-ready HTML document the browser can save as PDF.
       body = [
         "<!doctype html><html><head><meta charset='utf-8'><title>",
-        report.title,
+        escapeHtml(report.title),
         "</title><style>body{font:14px/1.5 system-ui,sans-serif;padding:32px;color:#111}table{border-collapse:collapse;width:100%;margin-top:16px}th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px}th{background:#f5f5f5}h1{font-size:22px}p{color:#555}</style></head><body>",
-        `<h1>${report.title}</h1>`,
-        `<p>${report.period} · ${report.dateFrom} to ${report.dateTo} (UTC) · category ${report.category}</p>`,
+        `<h1>${escapeHtml(report.title)}</h1>`,
+        `<p>${escapeHtml(report.period)} · ${escapeHtml(formatDateTimeInTimeZone(report.dateFrom, timeZone))} to ${escapeHtml(formatDateTimeInTimeZone(report.dateTo, timeZone))} (${escapeHtml(timeZone)}) · category ${escapeHtml(report.category)}</p>`,
         "<table><thead><tr>",
-        table.headers.map((header) => `<th>${header}</th>`).join(""),
+        table.headers.map((header) => `<th>${escapeHtml(header)}</th>`).join(""),
         "</tr></thead><tbody>",
-        table.rows.map((row) => `<tr>${row.map((cell) => `<td>${cell ?? ""}</td>`).join("")}</tr>`).join(""),
+        table.rows.map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`).join(""),
         "</tbody></table></body></html>",
       ].join("");
     }

@@ -1,8 +1,10 @@
-import { hasOrganizationWideStationAccess, isPlatformOwner, stationScopeForUser, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
+import { hasOrganizationWideStationAccess, isPlatformOwner, roleRequiresStationAssignment, stationScopeForUser, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import type { User } from "@/server/domain/types";
 import { createUser, listRoles, listUsers, setUserStations } from "@/server/db/repo/core";
 import { listAllStations } from "@/server/db/repo/stations";
-import { hashPassword } from "@/server/auth/session";
+import { createInvitationToken, hashPassword } from "@/server/auth/session";
+import { sendUserInvitationEmail } from "@/server/email/mailer";
+import { randomBytes } from "node:crypto";
 import {
   ApiError,
   audit,
@@ -47,13 +49,9 @@ export const POST = withPermission("users.create", async (request, ctx) => {
     const email = required(body.email, "Email").toLowerCase().trim();
     const name = maxLen(required(body.name, "Full name"), 120, "Full name");
     const roleId = required(body.roleId, "Role");
-    const password = String(body.password ?? "");
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new ApiError(422, "Enter a valid email address.", "validation_error");
-    }
-    if (password.length < 10) {
-      throw new ApiError(422, "A temporary password of at least 10 characters is required.", "validation_error");
     }
 
     const roles = (await listRoles());
@@ -76,8 +74,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
     if (stationIds.some((id) => !userCanAccessStation(ctx.user, id))) {
       throw new ApiError(403, "You cannot assign a user to a station outside your own scope.", "forbidden");
     }
-    const organizationWideRole = role.key === "admin" || isPlatformOwner(role.key);
-    if (!organizationWideRole && stationIds.length === 0) {
+    if (roleRequiresStationAssignment(role.key) && stationIds.length === 0) {
       throw new ApiError(422, "Assign at least one station to every non-administrator account.", "validation_error");
     }
 
@@ -88,16 +85,28 @@ export const POST = withPermission("users.create", async (request, ctx) => {
         email,
         name,
         roleId,
-        passwordHash: await hashPassword(password),
+        passwordHash: await hashPassword(randomBytes(48).toString("base64url")),
         phone: str(body.phone) || null,
         jobTitle: str(body.jobTitle) || null,
         status: "invited",
-        mfaEnabled: body.mfaEnabled === true,
       }));
   } catch (error) {
     uniqueViolation(error, "An account with this email address", "email address");
   }
     (await setUserStations(user.id, stationIds));
+    let invitationEmailSent = false;
+    const invitation = await createInvitationToken(user.id);
+    if (invitation) {
+      try {
+        invitationEmailSent = await sendUserInvitationEmail({
+          to: invitation.user.email,
+          name: invitation.user.name,
+          token: invitation.token,
+        });
+      } catch {
+        invitationEmailSent = false;
+      }
+    }
 
     (await audit({
       user: ctx.user,
@@ -109,7 +118,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
       next: { ...user, stationIds },
       request,
     }));
-    return jsonCreated({ ...user, stationIds });
+    return jsonCreated({ ...user, stationIds, invitationEmailSent });
   } catch (error) {
     return jsonError(error as Error, request);
   }

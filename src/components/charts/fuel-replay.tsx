@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cn, formatDateTime, formatNumber } from "@/lib/utils";
+import { cn, formatNumber } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { Badge, EmptyState } from "@/components/ui/feedback";
 import { Button } from "@/components/ui/button";
+import { tankStateForPercent } from "@/lib/status";
 import { TankVisual } from "./tank-visual";
 
 /**
@@ -41,7 +43,23 @@ interface ReplayPayload {
   consumption: { volume: number; count: number };
 }
 
-export function FuelReplay({ tankId, tankName, capacity }: { tankId: string; tankName: string; capacity: number }) {
+export function FuelReplay({
+  tankId,
+  tankName,
+  capacity,
+  timeZone,
+  criticalThresholdPct,
+  lowThresholdPct,
+  overfillThresholdPct,
+}: {
+  tankId: string;
+  tankName: string;
+  capacity: number;
+  timeZone: string;
+  criticalThresholdPct: number;
+  lowThresholdPct: number;
+  overfillThresholdPct: number;
+}) {
   const [data, setData] = useState<ReplayPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -165,7 +183,7 @@ export function FuelReplay({ tankId, tankName, capacity }: { tankId: string; tan
           <h3 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Fuel usage replay</h3>
           <p className="mt-0.5 max-w-2xl text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
             Scrubbable replay of measured level for {tankName}. Use the timeline to jump to any moment and see what the
-            probe was reporting at that time.
+            probe was reporting at that time. Times are shown in {timeZone}.
           </p>
         </div>
         <Badge tone="neutral">
@@ -182,20 +200,19 @@ export function FuelReplay({ tankId, tankName, capacity }: { tankId: string; tan
             volume={point?.volumeLiters ?? 0}
             capacity={capacity}
             size="lg"
-            status={
-              point && capacity > 0 && (point.volumeLiters / capacity) * 100 < 15
-                ? "critical"
-                : point && capacity > 0 && (point.volumeLiters / capacity) * 100 < 30
-                  ? "low"
-                  : "normal"
-            }
+            status={point
+              ? tankStateForPercent(point.levelPercent, criticalThresholdPct, lowThresholdPct, overfillThresholdPct)
+              : "offline"}
+            lowThresholdPct={lowThresholdPct}
+            criticalThresholdPct={criticalThresholdPct}
+            overfillThresholdPct={overfillThresholdPct}
             showHeader={false}
           />
         </div>
 
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <Readout label="Playhead" value={point ? formatDateTime(point.ts) : "-"} />
+            <Readout label="Playhead" value={point ? formatDateTimeInTimeZone(point.ts, timeZone) : "-"} />
             <Readout label="Volume" value={point ? `${formatNumber(Math.round(point.volumeLiters))} L` : "-"} />
             <Readout label="Level" value={point ? `${point.levelPercent.toFixed(1)}%` : "-"} />
             <Readout label="Temperature" value={point?.temperatureC == null ? "-" : `${point.temperatureC.toFixed(1)} °C`} />
@@ -228,8 +245,8 @@ export function FuelReplay({ tankId, tankName, capacity }: { tankId: string; tan
               />
             </div>
             <div className="mt-2 flex justify-between text-[0.6875rem] text-[var(--ink-3)]">
-              <span className="text-num">{formatDateTime(data.points[0].ts)}</span>
-              <span className="text-num">{formatDateTime(data.points[data.points.length - 1].ts)}</span>
+              <span className="text-num">{formatDateTimeInTimeZone(data.points[0].ts, timeZone)}</span>
+              <span className="text-num">{formatDateTimeInTimeZone(data.points[data.points.length - 1].ts, timeZone)}</span>
             </div>
           </div>
 

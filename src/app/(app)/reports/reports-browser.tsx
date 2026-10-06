@@ -1,7 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { formatDateTime, timeAgo } from "@/lib/utils";
+import { timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
 import { DataTable, type Column } from "@/components/ui/data-table";
@@ -19,6 +20,7 @@ interface ReportRow {
   period: string;
   dateFrom: string;
   dateTo: string;
+  timeZone: string;
   status: "queued" | "generating" | "ready" | "failed" | "archived";
   format: string;
   fileUrl: string | null;
@@ -113,7 +115,7 @@ export function ReportsBrowser({
         hideOnMobile: true,
         cell: (row) => (
           <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
-            {formatDateTime(row.dateFrom)} → {formatDateTime(row.dateTo)}
+            {formatDateTimeInTimeZone(row.dateFrom, row.timeZone)} → {formatDateTimeInTimeZone(row.dateTo, row.timeZone)} ({row.timeZone})
           </span>
         ),
       },

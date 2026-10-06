@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { cn, formatNumber, formatPercent } from "@/lib/utils";
-import { tankStateForPercent } from "@/lib/status";
+import { tankStateForPercent, type DataState } from "@/lib/status";
 import { LiveIndicator, StatusBadge } from "@/components/ui/feedback";
 
 /**
@@ -27,10 +27,10 @@ export interface TankVisualProps {
   status?: "full" | "normal" | "low" | "critical" | "offline";
   lowThresholdPct?: number;
   criticalThresholdPct?: number;
+  overfillThresholdPct?: number;
   temperatureC?: number | null;
   waterLevelMm?: number | null;
-  lastUpdated?: string | null;
-  dataState?: "live" | "delayed" | "stale" | "offline";
+  dataState?: DataState;
   className?: string;
   ariaLabel?: string;
 }
@@ -54,11 +54,11 @@ export function TankVisual({
   showMarkings = true,
   showHeader = true,
   status,
-  lowThresholdPct = 30,
-  criticalThresholdPct = 15,
+  lowThresholdPct = 20,
+  criticalThresholdPct = 10,
+  overfillThresholdPct = 95,
   temperatureC,
   waterLevelMm,
-  lastUpdated,
   dataState,
   className,
   ariaLabel,
@@ -77,9 +77,7 @@ export function TankVisual({
   }, [percent, animate]);
 
   const derivedStatus: NonNullable<TankVisualProps["status"]> =
-    status === "offline" && percent === 0
-      ? "offline"
-      : tankStateForPercent(percent, criticalThresholdPct, lowThresholdPct);
+    status ?? tankStateForPercent(percent, criticalThresholdPct, lowThresholdPct, overfillThresholdPct);
 
   const stateColors = {
     full: "#16a34a",
@@ -180,11 +178,6 @@ export function TankVisual({
         </div>
       ) : null}
 
-      {lastUpdated ? (
-        <p className="mt-1.5 text-[0.625rem] text-[var(--ink-3)]">
-          Last reading {new Date(lastUpdated).toLocaleTimeString("en-GB")}
-        </p>
-      ) : null}
     </div>
   );
 }

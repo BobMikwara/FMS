@@ -90,6 +90,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
             fillPercent: data.fillPercent,
             remainingCapacity: data.remainingCapacity,
             dataState: data.dataState,
+            timeZone: station?.timezone ?? data.station?.timezone ?? "Africa/Dar_es_Salaam",
             todayConsumption: canViewMovements ? data.todayConsumption : null,
             todayRefills: canViewMovements ? data.todayRefills : null,
             coverage: canViewMovements ? data.coverage : null,
@@ -106,6 +107,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
           canViewReadings={canViewReadings}
           canViewMovements={canViewMovements}
           canViewDevices={canViewDevices}
+          canEditTank={hasPermission(user, "tanks.edit")}
           canAcknowledge={hasPermission(user, "alerts.acknowledge")}
           canResolve={hasPermission(user, "alerts.resolve")}
           canNote={hasPermission(user, "alerts.notes")}
@@ -119,8 +121,8 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { label: "Full", range: "85 - 100%", color: "#16a34a" },
-            { label: "Normal", range: `${tank.lowThresholdPct} - <85%`, color: "#2563eb" },
+            { label: "Full", range: `≥ ${tank.overfillThresholdPct}%`, color: "#16a34a" },
+            { label: "Normal", range: `${tank.lowThresholdPct} - <${tank.overfillThresholdPct}%`, color: "#2563eb" },
             { label: "Low", range: `${tank.criticalThresholdPct} - <${tank.lowThresholdPct}%`, color: "#a16207" },
             { label: "Critical", range: `< ${tank.criticalThresholdPct}%`, color: "#dc2626" },
           ].map((row) => (
@@ -161,6 +163,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
             status={data?.status ?? "normal"}
             lowThresholdPct={tank.lowThresholdPct}
             criticalThresholdPct={tank.criticalThresholdPct}
+            overfillThresholdPct={tank.overfillThresholdPct}
             dataState={data?.dataState ?? "offline"}
             size="lg"
             showHeader={false}

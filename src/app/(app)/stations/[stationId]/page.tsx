@@ -8,7 +8,8 @@ import { PageHeader } from "@/components/ui/layout";
 import { Badge, EmptyState } from "@/components/ui/feedback";
 import { AreaChart, BarChart, ComparisonBars, type Series } from "@/components/charts/charts";
 import { StationStatusBadge } from "@/components/domain/badges";
-import { formatDateTime, formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { Icon } from "@/components/layout/icons";
 import { StationTanks } from "./station-tanks";
 
@@ -117,7 +118,7 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
                 <div className="card p-5">
                   <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Fuel level trend</h2>
                   <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
-                    Average measured volume across this station's tanks.
+                    Average measured volume across this station's tanks. Date buckets use {station.timezone}.
                   </p>
                   <div className="mt-4">
                     {detail.levelTrend.length > 1 ? (
@@ -149,7 +150,7 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
                 <div className="card p-5">
                   <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Consumption vs refills</h2>
                   <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
-                    Daily tank outflow against recorded refills.
+                    Daily tank outflow against recorded refills, grouped by {station.timezone}.
                   </p>
                   <div className="mt-4">
                     {detail.movementTrend.length > 0 ? (
@@ -253,7 +254,7 @@ export default async function StationDetailPage({ params }: { params: Promise<{ 
                     {canViewTanks ? tank?.name ?? movement.tankId : "Tank activity"}
                   </p>
                   <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
-                    {timeAgo(movement.ts)} · {formatDateTime(movement.ts)}
+                    {timeAgo(movement.ts)} · {formatDateTimeInTimeZone(movement.ts, station.timezone)} ({station.timezone})
                   </p>
                 </div>
                 <Badge tone={movement.type === "refill" ? "ok" : movement.type === "anomaly" ? "warn" : "info"}>

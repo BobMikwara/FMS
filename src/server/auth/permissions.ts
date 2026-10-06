@@ -14,6 +14,7 @@ export interface SessionPayload {
   roleId: string;
   roleKey: string;
   permissions: string[];
+  sessionVersion?: number;
 }
 
 export interface SessionUser {

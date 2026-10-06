@@ -2,7 +2,9 @@ import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { getCurrentUser } from "@/server/auth/session";
 import { listEvents, movementTotals } from "@/server/db/repo/events";
-import { isoDaysAgo } from "@/lib/utils";
+import { listAllStations } from "@/server/db/repo/stations";
+import { getOrganization } from "@/server/db/repo/core";
+import { dayStartInTimeZone, normalizeTimeZone } from "@/server/services/time-zone";
 import { PageHeader, StatCard } from "@/components/ui/layout";
 import { MovementsBrowser } from "./movements-browser";
 
@@ -12,16 +14,25 @@ export default async function MovementsPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const from = isoDaysAgo(14);
+  const [stations, organization] = await Promise.all([
+    listAllStations(user.organizationId),
+    getOrganization(user.organizationId),
+  ]);
+  const organizationTimeZone = normalizeTimeZone(organization?.timezone);
+  const from = dayStartInTimeZone(new Date(), -13, organizationTimeZone).toISOString();
   const to = new Date().toISOString();
-  const { rows } = (await listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50, stationIds: stationScopeForUser(user) }));
-  const totals = (await movementTotals(user.organizationId, from, to, undefined, undefined, stationScopeForUser(user)));
+  const [result, totals] = await Promise.all([
+    listEvents({ orgId: user.organizationId, from, to, page: 1, pageSize: 50, stationIds: stationScopeForUser(user) }),
+    movementTotals(user.organizationId, from, to, undefined, undefined, stationScopeForUser(user)),
+  ]);
+  const stationTimeZoneById = new Map(stations.map((station) => [station.id, normalizeTimeZone(station.timezone, organizationTimeZone)]));
+  const rows = result.rows;
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Fuel movement ledger"
-        description="Every refill and tank outflow derived from consecutive probe readings. Raw readings are stored separately from these derived events, so the audit trail stays intact."
+        description={`Every refill and tank outflow derived from consecutive probe readings. Timestamps are shown in each station's local time; all are stored in UTC. Organization default: ${organizationTimeZone}.`}
       />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -68,9 +79,11 @@ export default async function MovementsPage() {
           tankId: event.tankId,
           stationId: event.stationId,
           deviceId: event.deviceId,
+          timeZone: stationTimeZoneById.get(event.stationId) ?? organizationTimeZone,
         }))}
         from={from}
         to={to}
+        organizationTimeZone={organizationTimeZone}
       />
 
       <p className="text-[0.75rem] leading-relaxed text-[var(--ink-3)]">

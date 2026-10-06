@@ -1,32 +1,42 @@
-import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
+import { hasOrganizationWideStationAccess, stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import { hasPermission } from "@/server/auth/permissions";
-import type { ScheduledReport } from "@/server/domain/types";
+import { audit, ApiError, jsonCreated, jsonError, jsonOk, parseJsonBody, withPermission } from "@/server/api/route";
 import { createScheduledReport, listScheduledReports } from "@/server/db/repo/reports";
-import { listAllStations } from "@/server/db/repo/stations";
-import { ApiError } from "@/server/api/route";
-import {
-  audit,
-  jsonCreated,
-  jsonError,
-  jsonOk,
-  maxLen,
-  num,
-  parseJsonBody,
-  required,
-  str,
-  withPermission,
-  uniqueViolation,
-} from "@/server/api/route";
+import { deliveryStatusCountsForRuns, latestScheduledReportRuns } from "@/server/db/repo/scheduled-runs";
+import { getOrganization } from "@/server/db/repo/core";
+import { getStation } from "@/server/db/repo/stations";
+import { emailDeliveryConfigured } from "@/server/email/mailer";
+import { nextScheduledAt } from "@/server/services/schedule";
+import { validateScheduleDefinition } from "@/server/services/scheduled-report-policy";
 
 export const dynamic = "force-dynamic";
 
 export const GET = withPermission("reports.view", async (request, ctx) => {
   try {
-    const rows = (await listScheduledReports(ctx.user.organizationId, stationScopeForUser(ctx.user)));
-    const visibleRows = hasPermission(ctx.user, "reports.schedule")
-      ? rows
-      : rows.map((row) => ({ ...row, recipients: [] }));
-    return jsonOk({ rows: visibleRows, total: visibleRows.length });
+    const schedules = await listScheduledReports(ctx.user.organizationId, stationScopeForUser(ctx.user));
+    const runsBySchedule = await latestScheduledReportRuns(schedules.map((row) => row.id));
+    const deliveryCounts = await deliveryStatusCountsForRuns(
+      [...runsBySchedule.values()].map((run) => run.id),
+    );
+    const canSeeRecipients = hasPermission(ctx.user, "reports.schedule");
+    const rows = schedules.map((row) => {
+      const lastRun = runsBySchedule.get(row.id) ?? null;
+      const deliveryStatus = lastRun ? deliveryCounts.get(lastRun.id) ?? {} : {};
+      return {
+        ...row,
+        recipients: canSeeRecipients ? row.recipients : [],
+        lastRunStatus: lastRun?.status ?? null,
+        lastRunError: lastRun?.lastError ?? null,
+        lastRunCompletedAt: lastRun?.completedAt ?? null,
+        lastRunDeliveries: deliveryStatus,
+      };
+    });
+    return jsonOk({
+      rows,
+      total: rows.length,
+      executionAvailable: true,
+      emailDeliveryConfigured: emailDeliveryConfigured(),
+    });
   } catch (error) {
     return jsonError(error as Error, request);
   }
@@ -35,59 +45,48 @@ export const GET = withPermission("reports.view", async (request, ctx) => {
 export const POST = withPermission("reports.schedule", async (request, ctx) => {
   try {
     const body = await parseJsonBody<Record<string, unknown>>(request);
-    const name = maxLen(required(body.name, "Schedule name"), 120, "Schedule name");
-    const period = str(body.period, "weekly") as "daily" | "weekly" | "monthly";
-    // Accept either an explicit HH:MM string or a bare hour number.
-    const explicitTime = str(body.timeOfDay);
-    const parsedHour = /^([01]\d|2[0-3]):[0-5]\d$/.test(explicitTime)
-      ? Number(explicitTime.slice(0, 2))
-      : num(body.hour, 7);
-    const hour = parsedHour;
-    const requestedStationId = str(body.stationId) || null;
-    if (requestedStationId) {
-      const stations = await listAllStations(ctx.user.organizationId);
-      if (!stations.some((station) => station.id === requestedStationId)) {
-        throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
+    const validated = validateScheduleDefinition(body);
+    if (!validated.ok) throw new ApiError(422, validated.message, "validation_error");
+    const definition = validated.value;
+    let timezone: string;
+    if (definition.stationId) {
+      const station = await getStation(definition.stationId);
+      if (!station || station.organizationId !== ctx.user.organizationId || station.isArchived) {
+        throw new ApiError(422, "The selected station is not an active station in this organization.", "validation_error");
       }
-      if (!userCanAccessStation(ctx.user, requestedStationId)) {
+      if (!userCanAccessStation(ctx.user, station.id)) {
         throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
       }
-    } else if (stationScopeForUser(ctx.user) !== undefined) {
-      throw new ApiError(403, "A station must be selected for a scoped scheduled report.", "forbidden");
+      timezone = station.timezone;
+    } else {
+      if (!hasOrganizationWideStationAccess(ctx.user)) {
+        throw new ApiError(403, "Select a station within your scope before creating a scheduled report.", "forbidden");
+      }
+      const organization = await getOrganization(ctx.user.organizationId);
+      timezone = organization?.timezone ?? "Africa/Dar_es_Salaam";
     }
-    let scheduled!: ScheduledReport;
-    try {
-      scheduled = (await createScheduledReport({
-        organizationId: ctx.user.organizationId,
-        name,
-        category: str(body.category, "consumption"),
-        period,
-        dayOfWeek: num(body.dayOfWeek, 1),
-        dayOfMonth: period === "monthly" ? num(body.dayOfMonth, 1) : null,
-        timeOfDay: /^([01]\d|2[0-3]):[0-5]\d$/.test(explicitTime)
-          ? explicitTime
-          : `${String(Math.min(23, Math.max(0, hour))).padStart(2, "0")}:00`,
-        timezone: str(body.timezone, "Africa/Dar_es_Salaam"),
-        recipients: Array.isArray(body.recipients) ? (body.recipients as string[]) : [],
-        format: str(body.format, "pdf"),
-        stationId: requestedStationId,
-        filters: (body.filters ?? {}) as Record<string, unknown>,
-        isEnabled: body.isEnabled !== false,
-      }));
-    } catch (error) {
-      uniqueViolation(error, "A schedule with this name", "name");
-    }
-    (await audit({
+
+    const nextRunAt = definition.isEnabled
+      ? nextScheduledAt({ ...definition, timezone })
+      : null;
+    const schedule = await createScheduledReport({
+      organizationId: ctx.user.organizationId,
+      ...definition,
+      timezone,
+      filters: { createdById: ctx.user.id },
+      nextRunAt,
+    });
+    await audit({
       user: ctx.user,
       action: "created",
       entity: "scheduled_report",
-      entityId: scheduled.id,
-      entityLabel: scheduled.name,
-      summary: `${ctx.user.name} scheduled report "${scheduled.name}" (${scheduled.period})`,
-      next: scheduled,
+      entityId: schedule.id,
+      entityLabel: schedule.name,
+      summary: `${ctx.user.name} created scheduled report "${schedule.name}"`,
+      next: schedule,
       request,
-    }));
-    return jsonCreated(scheduled);
+    });
+    return jsonCreated(schedule);
   } catch (error) {
     return jsonError(error as Error, request);
   }

@@ -3,9 +3,6 @@
   "installCommand": "npm ci",
   "buildCommand": "npm run build",
   "functions": {
-    "src/app/api/stream/route.ts": {
-      "maxDuration": 60
-    },
     "src/app/api/cron/maintenance/route.ts": {
       "maxDuration": 60
     }
@@ -13,7 +10,7 @@
   "crons": [
     {
       "path": "/api/cron/maintenance",
-      "schedule": "0 0 * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

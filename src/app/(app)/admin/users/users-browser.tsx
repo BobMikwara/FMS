@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import { Field, Input, Select, Switch } from "@/components/ui/form";
+import { Field, Input, Select } from "@/components/ui/form";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { Badge, EmptyState, useToast } from "@/components/ui/feedback";
 import { ConfirmDialog, Modal } from "@/components/ui/overlay";
@@ -20,7 +20,6 @@ interface UserRow {
   roleId: string;
   roleName: string;
   roleKey: string;
-  mfaEnabled: boolean;
   lastLoginAt: string | null;
   lastLoginIp: string | null;
   createdAt: string;
@@ -60,6 +59,7 @@ export function UsersBrowser({
   const [editTarget, setEditTarget] = useState<UserRow | null>(null);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [invitationSendingId, setInvitationSendingId] = useState<string | null>(null);
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -67,7 +67,6 @@ export function UsersBrowser({
     roleId: "",
     status: "active",
     stationIds: [] as string[],
-    mfaEnabled: false,
   });
   const toast = useToast();
 
@@ -90,7 +89,6 @@ export function UsersBrowser({
       roleId: user.roleId,
       status: user.status,
       stationIds: ids,
-      mfaEnabled: user.mfaEnabled,
     });
   };
 
@@ -107,7 +105,6 @@ export function UsersBrowser({
           jobTitle: form.jobTitle.trim() || null,
           roleId: form.roleId,
           status: form.status,
-          mfaEnabled: form.mfaEnabled,
           stationIds: form.stationIds,
         }),
       });
@@ -143,6 +140,24 @@ export function UsersBrowser({
       toast.error("Could not reach the server. Please try again.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const resendInvitation = async (user: UserRow) => {
+    setInvitationSendingId(user.id);
+    try {
+      const response = await fetch(`/api/users/${user.id}/invite`, { method: "POST" });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        toast.error(payload.error?.message ?? "Could not send the activation link.");
+        return;
+      }
+      toast.success("Activation link sent", user.email);
+      query.refresh();
+    } catch {
+      toast.error("Could not reach the server. Please try again.");
+    } finally {
+      setInvitationSendingId(null);
     }
   };
 
@@ -189,12 +204,6 @@ export function UsersBrowser({
         ),
       },
       {
-        key: "mfa",
-        header: "MFA",
-        hideOnMobile: true,
-        cell: (row) => <Badge tone={row.mfaEnabled ? "ok" : "neutral"}>{row.mfaEnabled ? "Enabled" : "Off"}</Badge>,
-      },
-      {
         key: "lastLogin",
         header: "Last sign-in",
         hideOnMobile: true,
@@ -215,6 +224,16 @@ export function UsersBrowser({
         header: "",
         cell: (row) => canEdit || (canDelete && row.id !== currentUserId) ? (
           <div className="flex items-center justify-end gap-1">
+            {canEdit && row.status === "invited" ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                loading={invitationSendingId === row.id}
+                onClick={() => void resendInvitation(row)}
+              >
+                Resend invite
+              </Button>
+            ) : null}
             {canEdit ? (
               <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
                 Edit
@@ -269,7 +288,6 @@ export function UsersBrowser({
             { header: "Job title", value: (row) => row.jobTitle ?? "" },
             { header: "Phone", value: (row) => row.phone ?? "" },
             { header: "Status", value: (row) => row.status },
-            { header: "MFA", value: (row) => (row.mfaEnabled ? "enabled" : "off") },
             { header: "Stations", value: (row) => (row.stationNames.length === 0 ? "all" : row.stationNames.join("; ")) },
             { header: "Last sign-in", value: (row) => row.lastLoginAt ?? "" },
           ]}
@@ -410,14 +428,6 @@ export function UsersBrowser({
                 </fieldset>
               </>
             )}
-          </div>
-          <div className="sm:col-span-2">
-            <Switch
-              checked={form.mfaEnabled}
-              onChange={(value) => setForm({ ...form, mfaEnabled: value })}
-              label="Require multi-factor authentication"
-              description="Adds a second factor at sign-in for this user."
-            />
           </div>
         </div>
       </Modal>

@@ -1,4 +1,6 @@
 import { userCanAccessStation } from "@/server/auth/authorization";
+import { tankStateForPercent } from "@/lib/status";
+import { validateTankThresholds } from "@/lib/tank-thresholds";
 import { hasPermission } from "@/server/auth/session";
 import { archiveTank, getTank, listFuelTypes, updateTank } from "@/server/db/repo/stations";
 import {
@@ -13,6 +15,15 @@ import {
 } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
+
+function thresholdNumber(value: unknown, fallback: number, field: string): number {
+  if (value === undefined) return fallback;
+  const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    throw new ApiError(422, `${field} must be a finite percentage.`, "validation_error");
+  }
+  return parsed;
+}
 
 export const GET = withPermission("tanks.view", async (request, ctx) => {
   try {
@@ -66,8 +77,46 @@ export const PATCH = withAnyPermission(["tanks.edit", "tanks.delete"], async (re
     if (patch.isArchived !== undefined && !hasPermission(ctx.user, "tanks.delete")) {
       throw new ApiError(403, "You do not have permission to archive or restore tanks.", "forbidden");
     }
-    if (patch.capacity != null && Number(patch.capacity) <= 0) {
-      throw new ApiError(422, "Tank capacity must be a positive number of liters.", "validation_error");
+    if (patch.capacity !== undefined) {
+      const capacity = Number(patch.capacity);
+      if (!Number.isFinite(capacity) || capacity <= 0) {
+        throw new ApiError(422, "Tank capacity must be a positive number of liters.", "validation_error");
+      }
+      if (capacity > 5_000_000) {
+        throw new ApiError(422, "Tank capacity looks implausibly large. Please check the value.", "validation_error");
+      }
+      patch.capacity = capacity;
+    }
+    const thresholdKeys = ["criticalThresholdPct", "lowThresholdPct", "overfillThresholdPct"] as const;
+    const thresholdOrCapacityChanged = patch.capacity !== undefined || thresholdKeys.some((key) => patch[key] !== undefined);
+    if (thresholdOrCapacityChanged) {
+      const thresholds = {
+        criticalThresholdPct: thresholdNumber(patch.criticalThresholdPct, existing.criticalThresholdPct, "Critical threshold"),
+        lowThresholdPct: thresholdNumber(patch.lowThresholdPct, existing.lowThresholdPct, "Low threshold"),
+        overfillThresholdPct: thresholdNumber(patch.overfillThresholdPct, existing.overfillThresholdPct, "Overfill threshold"),
+      };
+      const thresholdValidation = validateTankThresholds(thresholds);
+      if (!thresholdValidation.ok) {
+        throw new ApiError(
+          422,
+          Object.values(thresholdValidation.errors)[0] ?? "Review the tank thresholds.",
+          "validation_error",
+          thresholdValidation.errors,
+        );
+      }
+      for (const key of thresholdKeys) {
+        if (patch[key] !== undefined) patch[key] = thresholds[key];
+      }
+      const nextCapacity = patch.capacity === undefined ? existing.capacity : Number(patch.capacity);
+      const currentPct = nextCapacity > 0 ? (existing.currentVolume / nextCapacity) * 100 : 0;
+      patch.status = !existing.lastReadingAt || existing.status === "offline"
+        ? "offline"
+        : tankStateForPercent(
+          currentPct,
+          thresholds.criticalThresholdPct,
+          thresholds.lowThresholdPct,
+          thresholds.overfillThresholdPct,
+        );
     }
     if (patch.fuelTypeId != null) {
       const fuelTypes = await listFuelTypes(ctx.user.organizationId);

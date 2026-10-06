@@ -6,17 +6,19 @@
  * number on screen can never disagree with the number in the file.
  *
  * Every value comes from the same read models the rest of the application uses
- * — nothing is estimated or invented for the sake of filling a column. When a
+ * - nothing is estimated or invented for the sake of filling a column. When a
  * value genuinely does not exist (no probe reading yet, no device attached) the
  * cell reads "Not available" rather than a plausible-looking number.
  */
 
-import { listAllStations, listAllTanks, listFuelTypes } from "@/server/db/repo/stations";
-import { listEvents } from "@/server/db/repo/events";
+import { listAllStations, listAllTanks, listFuelTypes, getStation } from "@/server/db/repo/stations";
+import { listEvents, movementTotals } from "@/server/db/repo/events";
 import { listAlerts } from "@/server/db/repo/alerts";
 import { listAllVehicles, listAllDevices } from "@/server/db/repo/devices";
-import { listAuditLogs } from "@/server/db/repo/core";
-import { buildDashboard, buildStationDetail } from "@/server/services/analytics";
+import { getOrganization, getSettings, listAuditLogs } from "@/server/db/repo/core";
+import { buildDashboard } from "@/server/services/analytics";
+import { formatDateTimeInTimeZone, normalizeTimeZone } from "@/server/services/time-zone";
+import { resolveOperatorSettings } from "@/server/domain/system-config";
 import { reconcileTank, stockCoverage } from "@/server/engine/fuel";
 import type { Report } from "@/server/domain/types";
 
@@ -56,27 +58,48 @@ function reportStationScope(report: Report, allowedStationIds?: string[]): strin
   return allowedStationIds;
 }
 
+export async function resolveReportTimeZone(report: Report): Promise<string> {
+  const storedTimeZone = report.filters.timeZone;
+  if (typeof storedTimeZone === "string" && storedTimeZone.trim()) {
+    return normalizeTimeZone(storedTimeZone);
+  }
+  const stationId = reportStationId(report);
+  const [organization, station] = await Promise.all([
+    getOrganization(report.organizationId),
+    stationId ? getStation(stationId) : Promise.resolve(null),
+  ]);
+  return normalizeTimeZone(station?.timezone ?? organization?.timezone);
+}
+
 async function movementRows(
   orgId: string,
   from: string,
   to: string,
-  type?: string,
-  stationIds?: string[],
+  type: string | undefined,
+  stationIds: string[] | undefined,
+  fallbackTimeZone: string,
 ): Promise<ReportTable> {
-  const result = (await listEvents({ orgId, type, from, to, pageSize: 5000, stationIds }));
+  const [result, stations, allTanks, fuelTypes, devices] = await Promise.all([
+    listEvents({ orgId, type, from, to, pageSize: 5000, stationIds }),
+    listAllStations(orgId),
+    listAllTanks(orgId),
+    listFuelTypes(orgId),
+    listAllDevices(orgId),
+  ]);
   if (result.rows.length === 0) {
     return empty("No movements were recorded in this period.");
   }
 
-  const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
-  const tankName = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.name]));
-  const fuelLabel = new Map((await listFuelTypes(orgId)).map((fuel) => [fuel.id, fuel.displayName]));
-  const deviceSerial = new Map((await listAllDevices(orgId)).map((device) => [device.id, device.serialNumber]));
-  const tankFuel = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.fuelTypeId]));
+  const stationById = new Map(stations.map((station) => [station.id, station]));
+  const tanks = allTanks.filter((tank) => !stationIds || stationIds.includes(tank.stationId));
+  const tankById = new Map(tanks.map((tank) => [tank.id, tank]));
+  const fuelLabel = new Map(fuelTypes.map((fuel) => [fuel.id, fuel.displayName]));
+  const deviceSerial = new Map(devices.map((device) => [device.id, device.serialNumber]));
 
   return {
     headers: [
-      "Timestamp (UTC)",
+      "Timestamp (station local time)",
+      "Time zone",
       "Station",
       "Tank",
       "Fuel type",
@@ -88,19 +111,25 @@ async function movementRows(
       "Device",
       "Reason",
     ],
-    rows: result.rows.map((event) => [
-      event.ts,
-      stationName.get(event.stationId) ?? "—",
-      tankName.get(event.tankId) ?? "—",
-      fuelLabel.get(tankFuel.get(event.tankId) ?? "") ?? "—",
-      event.type,
-      nf(Math.abs(event.volume)),
-      nf(event.levelBefore),
-      nf(event.levelAfter),
-      event.confidence,
-      event.deviceId ? deviceSerial.get(event.deviceId) ?? "—" : "—",
-      event.reason ?? "—",
-    ]),
+    rows: result.rows.map((event) => {
+      const station = stationById.get(event.stationId);
+      const timeZone = normalizeTimeZone(station?.timezone, fallbackTimeZone);
+      const tank = tankById.get(event.tankId);
+      return [
+        formatDateTimeInTimeZone(event.ts, timeZone),
+        timeZone,
+        station?.name ?? "-",
+        tank?.name ?? "-",
+        fuelLabel.get(tank?.fuelTypeId ?? "") ?? "-",
+        event.type,
+        nf(Math.abs(event.volume)),
+        nf(event.levelBefore),
+        nf(event.levelAfter),
+        event.confidence,
+        event.deviceId ? deviceSerial.get(event.deviceId) ?? "-" : "-",
+        event.reason ?? "-",
+      ];
+    }),
   };
 }
 
@@ -116,41 +145,59 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
     throw new Error("Report station is outside the current user's station scope.");
   }
   const stationIds = reportStationScope(report, allowedStationIds);
+  const timeZone = await resolveReportTimeZone(report);
 
   switch (report.category) {
     case "consumption":
-      return (await movementRows(orgId, from, to, "consumption", stationIds));
+      return (await movementRows(orgId, from, to, "consumption", stationIds, timeZone));
 
     case "refills":
-      return (await movementRows(orgId, from, to, "refill", stationIds));
+      return (await movementRows(orgId, from, to, "refill", stationIds, timeZone));
 
     case "movements":
     case "ledger":
-      return (await movementRows(orgId, from, to, undefined, stationIds));
+      return (await movementRows(orgId, from, to, undefined, stationIds, timeZone));
 
     case "inventory": {
-      const tanks = (await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId));
+      const [allTanks, stations, fuelTypes] = await Promise.all([
+        listAllTanks(orgId),
+        listAllStations(orgId),
+        listFuelTypes(orgId),
+      ]);
+      const tanks = allTanks.filter((tank) => !stationIds || stationIds.includes(tank.stationId));
       if (tanks.length === 0) return empty("No tanks have been added yet.");
-      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
-      const fuelLabel = new Map((await listFuelTypes(orgId)).map((fuel) => [fuel.id, fuel.displayName]));
+      const stationById = new Map(stations.map((station) => [station.id, station]));
+      const fuelLabel = new Map(fuelTypes.map((fuel) => [fuel.id, fuel.displayName]));
       return {
-        headers: ["Station", "Tank", "Fuel type", "Capacity (L)", "Volume (L)", "Level (%)", "Last reading (UTC)"],
-        rows: tanks.map((tank) => [
-          stationName.get(tank.stationId) ?? "—",
-          tank.name,
-          fuelLabel.get(tank.fuelTypeId) ?? "—",
-          nf(tank.capacity),
-          nf(tank.currentVolume),
-          nf((tank.currentVolume / tank.capacity) * 100, 1),
-          tank.lastValidReadingAt ?? tank.lastReadingAt ?? NOT_AVAILABLE,
-        ]),
+        headers: ["Station", "Tank", "Fuel type", "Capacity (L)", "Volume (L)", "Level (%)", "Last reading (station local time)", "Time zone"],
+        rows: tanks.map((tank) => {
+          const station = stationById.get(tank.stationId);
+          const stationTimeZone = normalizeTimeZone(station?.timezone, timeZone);
+          const lastReading = tank.lastValidReadingAt ?? tank.lastReadingAt;
+          return [
+            station?.name ?? "-",
+            tank.name,
+            fuelLabel.get(tank.fuelTypeId) ?? "-",
+            nf(tank.capacity),
+            nf(tank.currentVolume),
+            nf((tank.currentVolume / tank.capacity) * 100, 1),
+            lastReading ? formatDateTimeInTimeZone(lastReading, stationTimeZone) : NOT_AVAILABLE,
+            stationTimeZone,
+          ];
+        }),
       };
     }
 
     case "reconciliation": {
-      const tanks = (await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId));
+      const [allTanks, stations, storedSettings] = await Promise.all([
+        listAllTanks(orgId),
+        listAllStations(orgId),
+        getSettings(orgId),
+      ]);
+      const tanks = allTanks.filter((tank) => !stationIds || stationIds.includes(tank.stationId));
       if (tanks.length === 0) return empty("No tanks have been added yet.");
-      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
+      const stationById = new Map(stations.map((station) => [station.id, station]));
+      const operatorSettings = resolveOperatorSettings(storedSettings);
       return {
         headers: [
           "Station",
@@ -166,10 +213,14 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
           "Estimated days remaining",
         ],
         rows: await Promise.all(tanks.map(async (tank) => {
-          const reconciliation = (await reconcileTank(tank.id, from, to));
-          const coverage = (await stockCoverage(tank.id, 7));
+          const station = stationById.get(tank.stationId);
+          const stationTimeZone = normalizeTimeZone(station?.timezone, timeZone);
+          const [reconciliation, coverage] = await Promise.all([
+            reconcileTank(tank.id, from, to, operatorSettings.reconciliationVariancePct),
+            stockCoverage(tank.id, 7, stationTimeZone),
+          ]);
           return [
-            stationName.get(tank.stationId) ?? "—",
+            station?.name ?? "-",
             tank.name,
             nf(reconciliation.openingStock),
             nf(reconciliation.refills),
@@ -186,13 +237,18 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
     }
 
     case "alerts": {
-      const result = (await listAlerts({ orgId, from, to, pageSize: 5000, stationIds }));
+      const [result, stations, allTanks] = await Promise.all([
+        listAlerts({ orgId, from, to, pageSize: 5000, stationIds }),
+        listAllStations(orgId),
+        listAllTanks(orgId),
+      ]);
       if (result.rows.length === 0) return empty("No alerts were raised in this period.");
-      const stationName = new Map((await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id)).map((station) => [station.id, station.name]));
-      const tankName = new Map((await listAllTanks(orgId)).filter((tank) => !stationIds || stationIds.includes(tank.stationId)).map((tank) => [tank.id, tank.name]));
+      const stationById = new Map(stations.map((station) => [station.id, station]));
+      const tankById = new Map(allTanks.map((tank) => [tank.id, tank]));
       return {
         headers: [
-          "Raised (UTC)",
+          "Raised (station local time)",
+          "Time zone",
           "Station",
           "Tank",
           "Type",
@@ -200,23 +256,28 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
           "Status",
           "Title",
           "Message",
-          "Acknowledged (UTC)",
-          "Resolved (UTC)",
+          "Acknowledged (station local time)",
+          "Resolved (station local time)",
           "Resolution note",
         ],
-        rows: result.rows.map((alert) => [
-          alert.createdAt,
-          stationName.get(alert.stationId) ?? "—",
-          alert.tankId ? tankName.get(alert.tankId) ?? "—" : "—",
-          alert.type,
-          alert.severity,
-          alert.status,
-          alert.title,
-          alert.message,
-          alert.acknowledgedAt ?? "—",
-          alert.resolvedAt ?? "—",
-          alert.resolutionNote ?? "—",
-        ]),
+        rows: result.rows.map((alert) => {
+          const station = stationById.get(alert.stationId);
+          const stationTimeZone = normalizeTimeZone(station?.timezone, timeZone);
+          return [
+            formatDateTimeInTimeZone(alert.createdAt, stationTimeZone),
+            stationTimeZone,
+            station?.name ?? "-",
+            alert.tankId ? tankById.get(alert.tankId)?.name ?? "-" : "-",
+            alert.type,
+            alert.severity,
+            alert.status,
+            alert.title,
+            alert.message,
+            alert.acknowledgedAt ? formatDateTimeInTimeZone(alert.acknowledgedAt, stationTimeZone) : "-",
+            alert.resolvedAt ? formatDateTimeInTimeZone(alert.resolvedAt, stationTimeZone) : "-",
+            alert.resolutionNote ?? "-",
+          ];
+        }),
       };
     }
 
@@ -235,9 +296,9 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
           vehicle.plateNumber,
           vehicle.name,
           vehicle.type,
-          deviceSerial.get(vehicle.id) ?? "—",
-          vehicle.driverName ?? "—",
-          vehicle.driverPhone ?? "—",
+          deviceSerial.get(vehicle.id) ?? "-",
+          vehicle.driverName ?? "-",
+          vehicle.driverPhone ?? "-",
           vehicle.isArchived ? "Archived" : vehicle.status,
           nf(vehicle.odometerKm),
         ]),
@@ -254,21 +315,23 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
       })).rows;
       if (logs.length === 0) return empty("No audit entries in this period.");
       return {
-        headers: ["Timestamp (UTC)", "User", "Action", "Record", "Record type", "Detail", "IP address"],
+        headers: ["Timestamp (organization local time)", "Time zone", "User", "Action", "Record", "Record type", "Detail", "IP address"],
         rows: logs.map((log) => [
-          log.ts,
+          formatDateTimeInTimeZone(log.ts, timeZone),
+          timeZone,
           log.userLabel,
           log.action,
-          log.entityLabel ?? log.entityId ?? "—",
+          log.entityLabel ?? log.entityId ?? "-",
           log.entity,
           log.summary,
-          log.ip ?? "—",
+          log.ip ?? "-",
         ]),
       };
     }
 
     case "stations": {
-      const stations = (await listAllStations(orgId)).filter((station) => !stationIds || stationIds.includes(station.id));
+      const dashboard = await buildDashboard(orgId, "7d", stationIds, timeZone);
+      const stations = dashboard.stations;
       if (stations.length === 0) return empty("No stations have been added yet.");
       return {
         headers: [
@@ -279,46 +342,47 @@ export async function buildReportTable(report: Report, allowedStationIds?: strin
           "Fuel on hand (L)",
           "Capacity (L)",
           "Utilisation (%)",
-          "Consumption (L)",
-          "Refills (L)",
+          "Consumption today (L)",
+          "Refills today (L)",
           "Status",
         ],
-        rows: await Promise.all(stations.map(async (station) => {
-          const detail = (await buildStationDetail(station.id, "7d"));
-          return [
-            station.name,
-            station.city,
-            station.region,
-            detail ? nf(detail.tanks.length) : "0",
-            detail ? nf(detail.totalFuel) : NOT_AVAILABLE,
-            detail ? nf(detail.capacity) : NOT_AVAILABLE,
-            detail ? nf(detail.utilizationPct, 1) : NOT_AVAILABLE,
-            detail ? nf(detail.todayConsumption) : NOT_AVAILABLE,
-            detail ? nf(detail.todayRefills) : NOT_AVAILABLE,
-            station.status,
-          ];
-        })),
+        rows: stations.map((summary) => [
+          summary.station.name,
+          summary.station.city,
+          summary.station.region,
+          nf(summary.tankCount),
+          nf(summary.totalFuel),
+          nf(summary.capacity),
+          nf(summary.utilizationPct, 1),
+          nf(summary.todayConsumption),
+          nf(summary.todayRefills),
+          summary.status,
+        ]),
       };
     }
 
     case "summary":
     default: {
-      const dashboard = (await buildDashboard(orgId, "7d", stationIds));
+      const [dashboard, periodTotals] = await Promise.all([
+        buildDashboard(orgId, "7d", stationIds, timeZone),
+        movementTotals(orgId, from, to, undefined, undefined, stationIds),
+      ]);
       const k = dashboard.kpis;
       return {
         headers: ["Metric", "Value", "Unit / note"],
         rows: [
           ["Organization", dashboard.orgName, ""],
-          ["Report period", `${from} to ${to}`, "UTC"],
+          ["Report period", `${formatDateTimeInTimeZone(from, timeZone)} to ${formatDateTimeInTimeZone(to, timeZone)}`, timeZone],
+          ["Snapshot basis", "Current inventory and status", "Activity totals below use the selected report period"],
           ["Total stations", nf(k.totalStations), `${k.onlineStations} online · ${k.offlineStations} offline`],
           ["Total tanks", nf(k.totalTanks), `${k.lowFuelTanks} low · ${k.criticalFuelTanks} critical`],
-          ["Fuel on hand", nf(k.totalFuel), "L"],
+          ["Fuel on hand", nf(k.totalFuel), "L at export time; live data"],
           ["Total capacity", nf(k.totalCapacity), "L"],
           ["Average level", nf(k.averageLevelPct, 1), "%"],
-          ["Fuel consumption / tank outflow", nf(k.todayConsumption), "L today"],
-          ["Refills", nf(k.todayRefills), `L today · ${k.refillCount} events`],
-          ["Active alerts", nf(k.activeAlerts), `${k.criticalAlerts} critical · ${k.warningAlerts} warning`],
-          ["Suspected loss", nf(k.suspectedLoss), "L — investigation required, not proof of theft"],
+          ["Fuel consumption / tank outflow", nf(periodTotals.consumption), `${periodTotals.consumptionCount} events for selected period`],
+          ["Refills", nf(periodTotals.refills), `${periodTotals.refillCount} events for selected period`],
+          ["Active alerts", nf(k.activeAlerts), `${k.criticalAlerts} critical · ${k.warningAlerts} warning at export time`],
+          ["Suspected loss", nf(periodTotals.suspectedLoss), "L for selected period; investigate, not proof of theft"],
           ["Devices", nf(k.totalDevices), `${k.connectedDevices} online · ${k.offlineDevices} offline`],
           ["Vehicles", nf(k.vehicles), "tracked"],
         ],

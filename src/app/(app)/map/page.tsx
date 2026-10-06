@@ -2,10 +2,14 @@ import { stationScopeForUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { MapPin, Navigation } from "lucide-react";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { buildDashboard } from "@/server/services/analytics";
+import { getSettings } from "@/server/db/repo/core";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
-import { listAllVehicles } from "@/server/db/repo/devices";
+import { listAllDevices, listAllVehicles } from "@/server/db/repo/devices";
+import { latestPositionsForVehicles } from "@/server/db/repo/vehicle-positions";
+import { resolveOperatorSettings } from "@/server/domain/system-config";
+import { telemetryFreshness } from "@/server/domain/device-freshness";
 import { PageHeader, Notice } from "@/components/ui/layout";
 import { Badge } from "@/components/ui/feedback";
 import { NetworkMap, type MapStation, type MapVehicle } from "@/components/charts/map";
@@ -16,18 +20,40 @@ export default async function MapPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const dashboard = (await buildDashboard(user.organizationId, "7d", stationScopeForUser(user)));
   const allowedStationIds = stationScopeForUser(user);
   const inStationScope = (stationId: string | null | undefined) =>
     allowedStationIds === undefined || (stationId != null && allowedStationIds.includes(stationId));
-  const stations = (await listAllStations(user.organizationId)).filter((station) => inStationScope(station.id));
-  const tanks = (await listAllTanks(user.organizationId)).filter((tank) => inStationScope(tank.stationId));
-  const vehicles = (await listAllVehicles(user.organizationId)).filter((vehicle) => inStationScope(vehicle.stationId));
+  const canViewTrackerPositions = hasPermission(user, "devices.view");
+  const [dashboard, allStations, allTanks, allVehicles, settings, allDevices] = await Promise.all([
+    buildDashboard(user.organizationId, "7d", allowedStationIds),
+    listAllStations(user.organizationId),
+    listAllTanks(user.organizationId),
+    listAllVehicles(user.organizationId),
+    getSettings(user.organizationId),
+    canViewTrackerPositions ? listAllDevices(user.organizationId) : Promise.resolve([]),
+  ]);
+  const stations = allStations.filter((station) => inStationScope(station.id));
+  const tanks = allTanks.filter((tank) => inStationScope(tank.stationId));
+  const vehicles = allVehicles.filter((vehicle) => inStationScope(vehicle.stationId));
+  const vehicleIds = new Set(vehicles.map((vehicle) => vehicle.id));
+  const trackers = allDevices.filter((device) =>
+    device.type === "gps_tracker" && device.isActive && Boolean(device.vehicleId && vehicleIds.has(device.vehicleId)),
+  );
+  const trackerDeviceIds = trackers.map((device) => device.id);
+  const trackedVehicleIds = [...new Set(trackers.map((device) => device.vehicleId).filter((id): id is string => Boolean(id)))];
+  const latestPositions = canViewTrackerPositions
+    ? await latestPositionsForVehicles(user.organizationId, trackedVehicleIds, trackerDeviceIds)
+    : new Map();
+  const offlineTimeoutMin = resolveOperatorSettings(settings).offlineTimeoutMin;
 
   const stationSummary = new Map(dashboard.stations.map((entry) => [entry.station.id, entry]));
 
   const mapStations: MapStation[] = stations
-    .filter((station) => Number.isFinite(station.latitude) && Number.isFinite(station.longitude))
+    .filter((station) =>
+      Number.isFinite(station.latitude) &&
+      Number.isFinite(station.longitude) &&
+      !(station.latitude === 0 && station.longitude === 0),
+    )
     .map((station) => {
       const summary = stationSummary.get(station.id);
       const stationTanks = tanks.filter((tank) => tank.stationId === station.id);
@@ -37,9 +63,7 @@ export default async function MapPage() {
       const status: MapStation["status"] = station.isArchived
         ? "archived"
         : station.status === "online"
-          ? activeAlerts > 0
-            ? "online"
-            : "online"
+          ? "online"
           : station.status === "offline"
             ? "offline"
             : "maintenance";
@@ -62,25 +86,38 @@ export default async function MapPage() {
     .filter((vehicle) => !vehicle.isArchived)
     .map((vehicle) => {
       const home = stations.find((station) => station.id === vehicle.stationId);
+      const hasHomeCoordinates = Boolean(
+        home && Number.isFinite(home.latitude) && Number.isFinite(home.longitude) &&
+        !(home.latitude === 0 && home.longitude === 0),
+      );
+      const position = latestPositions.get(vehicle.id) ?? null;
+      const freshness = telemetryFreshness(position?.ts, {
+        liveWithinSeconds: Math.min(300, offlineTimeoutMin * 60),
+        staleAfterSeconds: offlineTimeoutMin * 60,
+      });
+      const useTrackerPosition = canViewTrackerPositions && position !== null && freshness === "live";
       return {
         id: vehicle.id,
         name: vehicle.name,
         plateNumber: vehicle.plateNumber,
-        latitude: home?.latitude ?? null,
-        longitude: home?.longitude ?? null,
+        latitude: useTrackerPosition ? position.latitude : hasHomeCoordinates ? home!.latitude : null,
+        longitude: useTrackerPosition ? position.longitude : hasHomeCoordinates ? home!.longitude : null,
         status: vehicle.status,
-        lastSeenAt: null,
+        lastSeenAt: position?.ts ?? null,
+        positionSource: useTrackerPosition ? "tracker" as const : hasHomeCoordinates ? "home_station" as const : "none" as const,
+        freshness,
       };
     });
 
   const online = mapStations.filter((station) => station.status === "online").length;
   const withAlerts = mapStations.filter((station) => station.activeAlerts > 0).length;
+  const freshTrackerCount = mapVehicles.filter((vehicle) => vehicle.positionSource === "tracker" && vehicle.freshness === "live").length;
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Network map"
-        description="Every station plotted by its coordinates. Marker size reflects tank capacity, the ring shows how full the site is, and a red badge counts active alerts."
+        description="Stations use their saved site coordinates; live vehicle markers appear only while tracker telemetry is fresh. Stale GPS fixes are retained in vehicle history, not plotted as current positions."
         breadcrumbs={[{ label: "Stations" }, { label: "Map view" }]}
         actions={
           <Link href="/stations" className="btn btn-secondary btn-sm">
@@ -102,17 +139,21 @@ export default async function MapPage() {
           <p className="mt-1 text-[0.75rem] text-[var(--ink-2)]">Tap a marker to open the station</p>
         </div>
         <div className="card p-4">
-          <p className="text-[0.6875rem] uppercase tracking-wide text-[var(--ink-3)]">Vehicles with a position</p>
+          <p className="text-[0.6875rem] uppercase tracking-wide text-[var(--ink-3)]">Fresh tracker positions</p>
           <p className="text-num mt-1.5 text-[1.5rem] font-semibold tracking-tight text-[var(--ink)]">
-            {mapVehicles.filter((vehicle) => vehicle.latitude != null).length}
+            {freshTrackerCount}
           </p>
-          <p className="mt-1 text-[0.75rem] text-[var(--ink-2)]">of {mapVehicles.length} tracked</p>
+          <p className="mt-1 text-[0.75rem] text-[var(--ink-2)]">of {mapVehicles.length} vehicles</p>
         </div>
       </div>
 
-      <Notice tone="info" title="Positions come from the tracker, not the tank">
-        Vehicle markers show the last known tracker position. When no position has been received the vehicle is shown at
-        its home station with a clear “Not available” timestamp rather than a guessed location.
+      <Notice
+        tone={freshTrackerCount > 0 ? "ok" : "info"}
+        title={freshTrackerCount > 0 ? "Fresh tracker fixes are plotted" : "No fresh tracker fix is available"}
+      >
+        {canViewTrackerPositions
+          ? `Only tracker coordinates received within the configured freshness window are plotted as current. Older fixes remain available in vehicle history. ${freshTrackerCount < mapVehicles.length ? "Other vehicle markers use the assigned home-station coordinates, which are static references and not current vehicle locations." : ""}`
+          : "Tracker coordinates require device-view permission. Vehicle markers use assigned home-station coordinates, which are static references and not current vehicle locations."}
       </Notice>
 
       <NetworkMap stations={mapStations} vehicles={mapVehicles} height={480} />

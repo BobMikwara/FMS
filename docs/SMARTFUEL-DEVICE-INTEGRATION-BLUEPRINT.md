@@ -56,8 +56,8 @@ The following table is the source-of-truth distinction between what is in the ap
 | **Raw TCP devices** | **Not existing.** No TCP listener or codec server is in the Next.js application. | Terminate TCP at a dedicated protocol gateway or vendor platform. Decode and authenticate there, then publish canonical messages over HTTPS or MQTT. |
 | **Fuel event detection** | **Existing.** `classifyMovement` compares a new reading with the latest tank reading and creates refill, consumption or anomaly events using configured/default thresholds. | Make classification idempotent and reprocessable, handle late data deliberately, add explicit delivery/transaction correlation and test sensor accuracy limits. |
 | **Alert engine** | **Existing for built-in live checks.** Ingest evaluates low, critical, overfill, water, temperature and suspected-loss conditions and creates durable alerts/notifications. Alert-rule CRUD also exists. | Complete the connection between configurable alert rules and the live ingestion path, enforce cooldowns, make alert creation idempotent and route notifications through a production delivery service. |
-| **Device health** | **Existing.** `sweepDeviceHealth` marks stale devices and associated tanks offline, creates an offline alert, preserves the last valid reading and auto-restores on recovery. The default offline threshold is 10 minutes. | Run the sweep every minute or at a defined operational interval. The current Vercel Cron schedule is daily (`0 0 * * *`), which is not sufficient for a 10-minute offline SLA. Add a real heartbeat path where a vendor supports it. |
-| **Live updates** | **Partial.** `GET /api/stream` is an authenticated, bounded SSE route that polls durable rows every three seconds and emits a `tick` snapshot. The inspected client source does not show a consumer for this route; notifications poll every 15 seconds. | Wire a client subscription with reconnect/stale state and relevant-tank updates, or provide a documented polling fallback. For multiple workers, add a durable event/fan-out layer rather than an in-process bus. |
+| **Device health** | **Existing.** `sweepDeviceHealth` marks stale devices and associated tanks offline, creates an offline alert, preserves the last valid reading and auto-restores on recovery. The default offline threshold is 10 minutes. The checked-in Vercel Cron schedule runs every five minutes. | Confirm that the deployment scheduler supports a five-minute cadence. If it does not, invoke the token-protected maintenance route from an external scheduler at the same cadence. Add a vendor heartbeat path where supported. |
+| **Live updates** | **Freshness is timestamp-based.** The unused three-second SSE snapshot route was removed to avoid repeated per-tank reads. The dashboard freshness indicator uses the latest valid device timestamp, not page-render time. There is no continuous browser push. | Keep the explicit live, delayed, stale and unknown states. Reintroduce a stream only if there is an operational need and it can be station-scoped with batched reads. |
 | **Database** | **Existing.** Local development uses SQLite; production is designed for PostgreSQL/Supabase through the async repository adapter and external migrations. | Use PostgreSQL with backups, indexes, connection pooling and a queue/worker path for ingestion. Do not run schema creation or migrations during a production request. |
 | **Monitoring** | **Partial.** There are health, audit, integration status/error fields and application logging. | Add structured device/message metrics, queue depth, ingestion latency, reject rate, stale-device metrics, alert lag, database health and vendor-specific dashboards. |
 | **Security** | **Partial.** Per-device keys are generated, hashed with SHA-256 and shown once; user APIs have session/RBAC/rate-limit wrappers; one provider uses an HMAC signature check. | Add device endpoint rate limiting, replay protection, key rotation policy, secret management, mTLS where justified, MQTT ACLs, payload-size limits, security events and a formal credential/offboarding process. |
@@ -140,7 +140,6 @@ The current application already implements a useful core path for an authenticat
 - Local SQLite adapter and production PostgreSQL adapter.
 - Production deployment documentation oriented around Vercel and Supabase PostgreSQL.
 - `POST /api/webhooks/device/[provider]` as the current hardware entry point.
-- `GET /api/stream` as the current SSE snapshot route.
 
 ## 3.2 Data model that exists today
 
@@ -1073,22 +1072,13 @@ The current HTTP fuel path processes reading, tank update, movement classificati
 
 # 16. Live Frontend Updates
 
-## 16.1 Existing SSE route
+## 16.1 Current dashboard freshness behavior
 
-`GET /api/stream` currently:
+The unused three-second SSE snapshot route was removed because no browser client consumed it and each tick queried the latest reading for every tank. The dashboard now derives its live, delayed, stale or unknown indicator from the latest valid device timestamp. The page render timestamp is displayed separately and is not described as telemetry freshness.
 
-- Requires an authenticated SmartFuel session.
-- Runs on the Node.js runtime.
-- Has a maximum duration of 60 seconds.
-- Sends a `retry: 3000` instruction.
-- Emits a `tick` event immediately and every three seconds.
-- Reads durable tank and station snapshots from the database.
-- Includes `totalFuel`, per-tank `tankId`, `levelPercent`, `volumeLiters`, `state`, `ts` and station status.
-- Recommends client reconnect after the bounded lifetime.
+There is no continuous dashboard push. If a product requirement later calls for it, design a station-scoped stream with a batched snapshot or event fan-out before adding a browser consumer. Do not restore per-tank polling on a short interval.
 
-It is a snapshot stream, not a vendor/device stream, and it currently does not expose a dedicated alert event in the route payload. The inspected client source does not show an active consumer for `/api/stream`; notification UI uses a 15-second fetch interval.
-
-## 16.2 Recommended browser behavior
+## 16.2 Future browser behavior, if push is required
 
 The dashboard should subscribe once at the authenticated app shell or a data provider layer. On a `tank.updated` event it should update only the affected tank query/cache entry. It must not reload the full page or all station data.
 
@@ -1153,7 +1143,7 @@ A device can be online while reporting an invalid temperature or impossible volu
 
 ## 17.3 Current scheduling gap
 
-The checked-in Vercel configuration schedules `/api/cron/maintenance` at `0 0 * * *`, once per day. A daily invocation cannot reliably detect a ten-minute outage. Before a production go-live, the maintenance sweep must run at an interval compatible with the configured timeout, such as every minute or every five minutes, or be moved to a durable worker/scheduler. This is a **Required infrastructure change**, not a frontend setting.
+The checked-in Vercel configuration schedules `/api/cron/maintenance` every five minutes. This is compatible with the default ten-minute timeout, but deployments must use a scheduler plan that supports the configured cadence. Otherwise, configure an external scheduler to call the token-protected endpoint every five minutes. Verify actual invocation history before relying on the outage alert SLA.
 
 ## 17.4 Heartbeat endpoint
 
@@ -1542,7 +1532,6 @@ Only the following are confirmed from the inspected current route files:
 | `GET` | `/api/tanks/:tankId/readings` | Authenticated tank reading history. |
 | `GET` | `/api/tanks/:tankId/movements` | Authenticated tank event history. |
 | `GET` | `/api/tanks/:tankId/replay` | Authenticated tank historical replay data. |
-| `GET` | `/api/stream` | Authenticated bounded SSE snapshot stream. |
 | `GET` | `/api/dashboard` | Authenticated dashboard read model. |
 | `GET`, `POST` | `/api/alerts` | Authenticated alert list and acknowledge/resolve action body. |
 | `GET`, `POST` | `/api/alert-rules` | Authenticated rule list/create. |
@@ -1804,7 +1793,7 @@ A device status card should link to the last accepted/rejected message and mappi
 | Alert engine failure | Required processing retry/dead letter | Show processing lag and replay after repair. |
 | Live channel disconnects | Current SSE can end after bounded lifetime | Browser reconnects, reconciles snapshot and falls back to polling. |
 | Wrong volume | Usually calibration/unit/mapping | Compare raw measurement, calibration version, tank capacity and previous readings. |
-| No dashboard update | Live consumer, cache or projection issue | Compare database latest reading with `/api/stream`/poll response and browser connection state. |
+| No dashboard update | Stale server-rendered data or no new valid telemetry | Compare the device's latest valid timestamp with the dashboard data-load timestamp and check the browser refresh. |
 
 ---
 
@@ -1906,7 +1895,6 @@ SMTP_USER
 SMTP_PASSWORD
 SMTP_FROM
 SESSION_MAX_AGE_SECONDS
-REALTIME_TRANSPORT
 DEMO_SIMULATOR
 CRON_SECRET
 RATE_LIMIT_MAX
@@ -2389,10 +2377,10 @@ Check the measured timestamp and freshness, not only the numeric value.
 | Duplicate readings | Gateway retry, no message ID, same timestamp | Message ID/fingerprint, reading rows | Implement durable inbox and return duplicate success. |
 | Out-of-order readings | Offline replay or device clock issue | Device sequence and measured/received times | Apply late-data policy; repair clock; do not overwrite current projection blindly. |
 | No data after internet outage | Gateway queue disabled/full, clock, broker auth | Queue depth, disk, oldest message, reconnect logs | Enable disk queue, free storage, rotate credential, replay. |
-| Dashboard stale | No browser consumer, SSE lifetime ended, query/cache issue | `/api/stream`, browser network, latest DB row | Reconnect, poll fallback, wire tank event cache updates. |
+| Dashboard freshness is stale or unknown | No recent valid device timestamp, device has never connected, or the dashboard data load failed | Device `last_seen_at`, page data-load time and maintenance invocation history | Check the probe/tracker and the five-minute maintenance scheduler; do not infer a live position from the page render time. |
 | Alert missing | Built-in threshold not met, rule not wired, cooldown, worker lag | Alert rule, event, processing logs, cooldown state | Correct rule/worker; replay after idempotency check. |
 | Too many alerts | Flapping sensor, missing cooldown/idempotency | Alert keys and message repetition | Add hysteresis/cooldown and resolve/reopen policy. |
-| Device marked offline too late | Daily cron or missed sweep | Cron invocation history, last sweep time | Run scheduler at timeout-compatible interval. |
+| Device marked offline too late | Missed or unsupported five-minute schedule | Cron invocation history, last sweep time, configured offline timeout | Ensure the scheduler invokes the maintenance endpoint at least every five minutes. |
 | Device marked fault | Invalid volume/temp/format | Invalid-reading alert and raw payload | Repair device/calibration/adapter; do not force online manually without a test. |
 | GPS position missing | Canonical type has no coordinates or GPS path absent | Teltonika adapter output and vehicle APIs | Implement vehicle telemetry contract and persistence. |
 | Veeder only reads one tank | Current adapter selects first array item | Raw `tanks` payload and mapping | Implement per-channel mapping and process all configured tanks. |
@@ -2686,7 +2674,7 @@ The architectural rule is:
 13. **How does the dashboard update without refresh?** The current server offers bounded SSE snapshots; the browser integration and robust fallback must be completed so only affected tank/device state updates.
 14. **What happens when internet goes down?** A production gateway buffers locally and replays after reconnect. The current application alone has no station gateway queue.
 15. **What happens with duplicate data?** Current protection is timestamp-based and incomplete. Production must use message ID/sequence/fingerprint idempotency and return duplicate success.
-16. **How is device health monitored?** Use last-seen/last-reading, heartbeat, freshness thresholds and a frequent maintenance sweep. The current daily cron is too infrequent for a ten-minute offline threshold.
+16. **How is device health monitored?** Use last-seen/last-reading, freshness thresholds and a maintenance sweep every five minutes. Confirm the deployment scheduler supports that cadence before relying on a ten-minute offline threshold.
 17. **How do we troubleshoot a stopped device?** Follow the chain: power/sensor, gateway queue, network/APN, broker/API credentials, provider adapter, mapping, queue, database and live projection; use last-seen and message IDs.
 18. **How do we add another manufacturer?** Obtain documentation, add an adapter and fixtures, map units/identity, pass security/failure tests and register it without changing core business logic.
 19. **What infrastructure is required?** Production PostgreSQL, TLS, secure credential management, ingestion edge, adapter workers, durable queue, MQTT broker/gateway where applicable, frequent health scheduler, observability, backups and live delivery.

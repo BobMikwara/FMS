@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { formatDateTime } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { Badge } from "@/components/ui/feedback";
 import { ExportButton, useResourceQuery } from "@/components/domain/resource-query";
@@ -16,6 +16,7 @@ interface AuditRow {
   actorEmail: string;
   ipAddress: string | null;
   createdAt: string;
+  timeZone: string;
   metadata: string | null;
 }
 
@@ -49,10 +50,11 @@ export function AuditLogBrowser({ initialRows }: { initialRows: AuditRow[] }) {
     () => [
       {
         key: "createdAt",
-        header: "When",
+        header: "When (organization local time)",
         cell: (row) => (
           <div>
-            <p className="text-num text-[0.75rem] text-[var(--ink)]">{formatDateTime(row.createdAt)}</p>
+            <p className="text-num text-[0.75rem] text-[var(--ink)]">{formatDateTimeInTimeZone(row.createdAt, row.timeZone)}</p>
+            <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{row.timeZone}</p>
             {row.ipAddress ? <p className="text-num mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{row.ipAddress}</p> : null}
           </div>
         ),
@@ -144,7 +146,7 @@ export function AuditLogBrowser({ initialRows }: { initialRows: AuditRow[] }) {
           filename="audit-log"
           disabled={query.loading}
           columns={[
-            { header: "Timestamp", value: (row) => row.createdAt },
+            { header: "Timestamp (organization local time)", value: (row) => `${formatDateTimeInTimeZone(row.createdAt, row.timeZone)} (${row.timeZone})` },
             { header: "Action", value: (row) => row.action },
             { header: "Record type", value: (row) => row.entityType },
             { header: "Record", value: (row) => row.entityLabel ?? row.entityId ?? "" },

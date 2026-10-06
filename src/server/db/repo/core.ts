@@ -1,4 +1,5 @@
-import { execute, id, insertMany, intToBool, query, queryOne, toIso } from "../client";
+import { createHash } from "node:crypto";
+import { execute, id, insertMany, intToBool, query, queryOne, toIso, transaction } from "../client";
 import type {
   AuditLog,
   Integration,
@@ -238,8 +239,28 @@ export async function updateUser(
   if (patch.lockedUntil !== undefined) push("locked_until", patch.lockedUntil);
   if (fields.length === 0) return (await getUser(userId));
   values.push(userId);
-  (await execute(`UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
-  return (await getUser(userId));
+  return transaction(async () => {
+    const result = await execute(
+      `UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`,
+      values,
+    );
+    const revokeSessions = patch.passwordHash !== undefined || patch.mfaEnabled !== undefined || patch.status !== undefined;
+    if (result.changes > 0 && revokeSessions) {
+      await execute(
+        `INSERT INTO user_security_state (user_id, session_version, updated_at)
+         VALUES (?, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+         ON CONFLICT (user_id) DO UPDATE SET
+           session_version = user_security_state.session_version + 1,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`,
+        [userId],
+      );
+      await execute("DELETE FROM user_mfa_login_challenges WHERE user_id = ?", [userId]);
+      if (patch.passwordHash !== undefined) {
+        await execute("DELETE FROM user_mfa_enrollments WHERE user_id = ?", [userId]);
+      }
+    }
+    return getUser(userId);
+  });
 }
 
 export async function suspendUser(userId: string): Promise<User | null> {
@@ -298,10 +319,15 @@ function mapUser(row: Record<string, unknown>, stationMap: Map<string, string[]>
 /* -------------------------------------------------------------------------- */
 
 export async function createResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
-  (await execute(
+  const now = new Date().toISOString();
+  await execute(
+    "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+    [now, userId],
+  );
+  await execute(
     "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
     [id("prt"), userId, tokenHash, expiresAt],
-  ));
+  );
 }
 
 export async function consumeResetToken(tokenHash: string): Promise<string | null> {
@@ -555,11 +581,15 @@ export async function createNotification(input: {
   body: string;
   severity?: string;
   channel?: string;
+  idempotencyKey?: string;
 }): Promise<Notification> {
-  const notificationId = id("ntf");
+  const notificationId = input.idempotencyKey
+    ? `ntf_${createHash("sha256").update(input.idempotencyKey).digest("hex").slice(0, 48)}`
+    : id("ntf");
   (await execute(
     `INSERT INTO notifications (id, organization_id, user_id, alert_id, title, body, severity, channel)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO NOTHING`,
     [
       notificationId,
       input.organizationId,
@@ -600,10 +630,15 @@ export async function listNotifications(
 ): Promise<Notification[]> {
   if (stationIds !== undefined && stationIds.length === 0) return [];
   const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const readJoin = userId ? "LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = ?" : "";
+  const readState = userId
+    ? "CASE WHEN nr.notification_id IS NOT NULL THEN 1 WHEN n.user_id IS NULL AND n.is_read = 1 THEN 1 ELSE 0 END"
+    : "n.is_read";
   const stationClause = notificationStationClause(orgId, stationIds);
   const rows = (await query<Record<string, unknown>>(
-    `SELECT n.* FROM notifications n WHERE n.organization_id = ?${userClause}${stationClause.sql} ORDER BY n.created_at DESC LIMIT ?`,
-    [orgId, ...(userId ? [userId] : []), ...stationClause.params, limit],
+    `SELECT n.*, ${readState} AS read_for_user FROM notifications n ${readJoin}
+     WHERE n.organization_id = ?${userClause}${stationClause.sql} ORDER BY n.created_at DESC LIMIT ?`,
+    [...(userId ? [userId] : []), orgId, ...(userId ? [userId] : []), ...stationClause.params, limit],
   ));
   return rows.map(mapNotification);
 }
@@ -611,10 +646,13 @@ export async function listNotifications(
 export async function countUnreadNotifications(orgId: string, userId?: string, stationIds?: string[]): Promise<number> {
   if (stationIds !== undefined && stationIds.length === 0) return 0;
   const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const readClause = userId
+    ? " AND (n.user_id IS NOT NULL OR n.is_read = 0) AND NOT EXISTS (SELECT 1 FROM notification_reads nr WHERE nr.notification_id = n.id AND nr.user_id = ?)"
+    : " AND n.is_read = 0";
   const stationClause = notificationStationClause(orgId, stationIds);
   const row = (await queryOne<{ n: number }>(
-    `SELECT count(*) AS n FROM notifications n WHERE n.organization_id = ? AND n.is_read = 0${userClause}${stationClause.sql}`,
-    [orgId, ...(userId ? [userId] : []), ...stationClause.params],
+    `SELECT count(*) AS n FROM notifications n WHERE n.organization_id = ?${readClause}${userClause}${stationClause.sql}`,
+    [orgId, ...(userId ? [userId] : []), ...(userId ? [userId] : []), ...stationClause.params],
   ));
   return Number(row?.n ?? 0);
 }
@@ -626,19 +664,27 @@ export async function markNotificationsRead(
   stationIds?: string[],
 ): Promise<number> {
   if (stationIds !== undefined && stationIds.length === 0) return 0;
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
   const stationClause = notificationStationClause(orgId, stationIds);
-  if (ids && ids.length > 0) {
-    const placeholders = ids.map(() => "?").join(", ");
-    const result = await execute(
-      `UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})${userClause}${stationClause.sql}`,
-      [orgId, ...ids, ...(userId ? [userId] : []), ...stationClause.params],
-    );
-    return result.changes;
+  const selectedIds = ids?.filter((value) => typeof value === "string" && value.length > 0);
+  if (selectedIds && selectedIds.length === 0) return 0;
+
+  if (!userId) {
+    const idClause = selectedIds ? ` AND id IN (${selectedIds.map(() => "?").join(", ")})` : "";
+    const userClause = "";
+    return (await execute(
+      `UPDATE notifications SET is_read = 1 WHERE organization_id = ?${idClause}${userClause}${stationClause.sql}`,
+      [orgId, ...(selectedIds ?? []), ...stationClause.params],
+    )).changes;
   }
+
+  const idClause = selectedIds ? ` AND n.id IN (${selectedIds.map(() => "?").join(", ")})` : "";
+  const now = new Date().toISOString();
   const result = await execute(
-    `UPDATE notifications SET is_read = 1 WHERE organization_id = ?${userClause}${stationClause.sql}`,
-    [orgId, ...(userId ? [userId] : []), ...stationClause.params],
+    `INSERT INTO notification_reads (notification_id, user_id, read_at)
+     SELECT n.id, ?, ? FROM notifications n
+     WHERE n.organization_id = ? AND (n.user_id IS NULL OR n.user_id = ?)${idClause}${stationClause.sql}
+     ON CONFLICT (notification_id, user_id) DO NOTHING`,
+    [userId, now, orgId, userId, ...(selectedIds ?? []), ...stationClause.params],
   );
   return result.changes;
 }
@@ -653,7 +699,7 @@ function mapNotification(row: Record<string, unknown>): Notification {
     body: String(row.body),
     severity: String(row.severity) as Notification["severity"],
     channel: String(row.channel),
-    isRead: intToBool(row.is_read),
+    isRead: intToBool(row.read_for_user ?? row.is_read),
     createdAt: String(row.created_at),
   };
 }

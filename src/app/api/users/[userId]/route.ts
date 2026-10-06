@@ -1,6 +1,6 @@
-import { hasOrganizationWideStationAccess, isPlatformOwner, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
+import { hasOrganizationWideStationAccess, isPlatformOwner, roleRequiresStationAssignment, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import { getUser, listRoles, listUsers, setUserStations, suspendUser, updateUser } from "@/server/db/repo/core";
-import { hashPassword } from "@/server/auth/session";
+import { hashPassword, setSessionCookie } from "@/server/auth/session";
 import { listAllStations } from "@/server/db/repo/stations";
 import {
   ApiError,
@@ -40,7 +40,7 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
 
     const body = await parseJsonBody<Record<string, unknown>>(request);
     const patch: Record<string, unknown> = {};
-    for (const key of ["name", "phone", "jobTitle", "status", "roleId", "mfaEnabled"]) {
+    for (const key of ["name", "phone", "jobTitle", "status", "roleId"]) {
       if (body[key] !== undefined) patch[key] = body[key];
     }
     let nextRoleKey = existing.roleKey;
@@ -101,6 +101,11 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
       stationIdsToSet = [...new Set([...outsideScope, ...requestedStationIds])];
     }
 
+    const effectiveStationIds = stationIdsToSet ?? existing.stationIds;
+    if (roleRequiresStationAssignment(nextRoleKey) && effectiveStationIds.length === 0) {
+      throw new ApiError(422, "Assign at least one station to every non-administrator account.", "validation_error");
+    }
+
     if (userId === ctx.user.id && !hasOrganizationWideStationAccess(ctx.user)) {
       const roleChanged = patch.roleId !== undefined && String(patch.roleId) !== existing.roleId;
       const stationAssignmentsChanged = stationIdsToSet !== undefined && (
@@ -118,6 +123,17 @@ export const PATCH = withPermission("users.edit", async (request, ctx) => {
     if (stationIdsToSet !== undefined) {
       (await setUserStations(userId, stationIdsToSet));
       user.stationIds = stationIdsToSet;
+    }
+    if (userId === ctx.user.id && patch.passwordHash !== undefined) {
+      await setSessionCookie({
+        sub: ctx.user.id,
+        email: ctx.user.email,
+        name: ctx.user.name,
+        orgId: ctx.user.organizationId,
+        roleId: ctx.user.roleId,
+        roleKey: ctx.user.roleKey,
+        permissions: ctx.user.permissions,
+      });
     }
 
     (await audit({

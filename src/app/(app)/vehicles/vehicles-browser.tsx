@@ -157,9 +157,14 @@ export function VehiclesBrowser({
               </Link>
             ) : null}
             {canViewDevices ? (
-              <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
-                Tracker
-              </Link>
+              <>
+                <Link href={`/vehicles/${row.id}`} className="btn btn-ghost btn-sm">
+                  Position history
+                </Link>
+                <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
+                  Tracker
+                </Link>
+              </>
             ) : null}
             {canArchive ? (
               <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>

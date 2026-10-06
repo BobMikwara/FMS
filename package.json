@@ -8,6 +8,7 @@
     "build": "next build",
     "start": "NODE_OPTIONS=--disable-warning=ExperimentalWarning next start",
     "typecheck": "tsc --noEmit",
+    "test": "node --disable-warning=ExperimentalWarning --require ./tests/register-typescript.cjs --test tests/*.test.cjs",
     "db:setup": "node --disable-warning=ExperimentalWarning scripts/setup-db.mjs",
     "db:seed": "node --disable-warning=ExperimentalWarning scripts/seed.mjs --demo",
     "db:reset": "node --disable-warning=ExperimentalWarning scripts/setup-db.mjs --reset",

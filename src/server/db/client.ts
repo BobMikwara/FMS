@@ -122,13 +122,13 @@ function postgresParameters(params: unknown[]): PostgresParameter[] {
   });
 }
 
-function postgresSql(sql: string): string {
+export function translateSqlForPostgres(sql: string): string {
   const pgNow = `to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
   const pgSevenDaysAgo = `to_char((CURRENT_TIMESTAMP - INTERVAL '7 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
   let translated = sql
     .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now','-7 days'\)/g, pgSevenDaysAgo)
     .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now'\)/g, pgNow)
-    .replace(/strftime\('%Y-%m-%dT%H:00',\s*([a-zA-Z0-9_.]+)\)/g, "to_char(date_trunc('hour', $1::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:00')")
+    .replace(/strftime\('%Y-%m-%dT%H:00',\s*([a-zA-Z0-9_.]+)\)/g, "to_char(date_trunc('hour', ($1::timestamptz AT TIME ZONE 'UTC')), 'YYYY-MM-DD\"T\"HH24:00')")
     .replace(/strftime\('%Y-%m-%d',\s*([a-zA-Z0-9_.]+)\)/g, "to_char($1::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')");
   let index = 0;
   return translated.replace(/\?/g, () => `$${++index}`);
@@ -165,7 +165,7 @@ export type Row = Record<string, unknown>;
 
 export async function query<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
   await ensureSchema();
-  if (USE_POSTGRES) return (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
+  if (USE_POSTGRES) return (await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params))) as T[];
   return await withSqliteAccess(() => {
     const stmt = sqlite().prepare(sql);
     return stmt.all(...(params as never[])) as T[];
@@ -175,7 +175,7 @@ export async function query<T = Row>(sql: string, params: unknown[] = []): Promi
 export async function queryOne<T = Row>(sql: string, params: unknown[] = []): Promise<T | null> {
   await ensureSchema();
   if (USE_POSTGRES) {
-    const rows = (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
+    const rows = (await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params))) as T[];
     return rows[0] ?? null;
   }
   return await withSqliteAccess(() => {
@@ -191,7 +191,7 @@ export async function execute(
 ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
   await ensureSchema();
   if (USE_POSTGRES) {
-    const result = await postgresDb().unsafe(postgresSql(sql), postgresParameters(params));
+    const result = await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params));
     return { changes: Number(result.count ?? 0), lastInsertRowid: 0 };
   }
   return await withSqliteAccess(() => {
@@ -214,6 +214,7 @@ export async function exec(sql: string): Promise<void> {
 export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
   await ensureSchema();
   if (USE_POSTGRES) {
+    if (transactionStore.getStore()) return await fn();
     return (await postgresDb().begin(async (tx) => transactionStore.run(tx as unknown as PostgresConnection, fn))) as T;
   }
   if (sqliteTransactionStore.getStore()?.active) return await fn();

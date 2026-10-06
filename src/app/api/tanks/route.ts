@@ -1,4 +1,5 @@
 import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
+import { validateTankThresholds } from "@/lib/tank-thresholds";
 import { createTank, getStation, listFuelTypes, listTanks } from "@/server/db/repo/stations";
 import {
   ApiError,
@@ -16,6 +17,15 @@ import {
 } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
+
+function thresholdNumber(value: unknown, fallback: number, field: string): number {
+  if (value === undefined) return fallback;
+  const parsed = typeof value === "number" || typeof value === "string" ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    throw new ApiError(422, `${field} must be a finite percentage.`, "validation_error");
+  }
+  return parsed;
+}
 
 export const GET = withPermission("tanks.view", async (request, ctx) => {
   try {
@@ -55,6 +65,20 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
     if (capacity > 5_000_000) {
       throw new ApiError(422, "Tank capacity looks implausibly large. Please check the value.", "validation_error");
     }
+    const thresholds = {
+      criticalThresholdPct: thresholdNumber(body.criticalThresholdPct, 10, "Critical threshold"),
+      lowThresholdPct: thresholdNumber(body.lowThresholdPct, 20, "Low threshold"),
+      overfillThresholdPct: thresholdNumber(body.overfillThresholdPct, 95, "Overfill threshold"),
+    };
+    const thresholdValidation = validateTankThresholds(thresholds);
+    if (!thresholdValidation.ok) {
+      throw new ApiError(
+        422,
+        Object.values(thresholdValidation.errors)[0] ?? "Review the tank thresholds.",
+        "validation_error",
+        thresholdValidation.errors,
+      );
+    }
     const station = await getStation(stationId);
     if (!station || station.organizationId !== ctx.user.organizationId || station.isArchived) {
       throw new ApiError(422, "Select an active station in your organization.", "validation_error");
@@ -82,9 +106,7 @@ export const POST = withPermission("tanks.create", async (request, ctx) => {
       manufacturer: str(body.manufacturer) || null,
       installationDate: str(body.installationDate) || null,
       minLevel: num(body.minLevel, 0),
-      lowThresholdPct: num(body.lowThresholdPct, 20),
-      criticalThresholdPct: num(body.criticalThresholdPct, 10),
-      overfillThresholdPct: num(body.overfillThresholdPct, 95),
+      ...thresholds,
       notes: str(body.notes) || null,
     }));
     (await audit({

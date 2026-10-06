@@ -10,9 +10,13 @@ export async function POST(request: Request) {
       return jsonError(unprocessable("Email and password are required."));
     }
     const result = await authenticate(body.email, body.password, ip);
-    if (!result.ok || !result.user) {
+    if (!result.ok) {
       return jsonError(unauthorized(result.error ?? "Sign in failed."));
     }
+    if (result.mfaRequired && result.challengeToken) {
+      return jsonOk({ mfaRequired: true, challengeToken: result.challengeToken });
+    }
+    if (!result.user) return jsonError(unauthorized("Sign in failed."));
     await setSessionCookie({
       sub: result.user.id,
       email: result.user.email,

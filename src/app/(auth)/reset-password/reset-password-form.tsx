@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/layout";
 import { Icon } from "@/components/layout/icons";
 
-export function ResetPasswordForm({ token }: { token: string }) {
+export function ResetPasswordForm({ token, mode }: { token: string; mode: "activate" | "reset" }) {
+  const activating = mode === "activate";
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +39,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
       }
       setDone(true);
       window.setTimeout(() => {
-        window.location.href = "/login?reset=success";
+        window.location.href = activating ? "/login?activated=success" : "/login?reset=success";
       }, 1200);
     } catch {
       setError("We couldn't reach the server. Check your connection and try again.");
@@ -57,14 +58,18 @@ export function ResetPasswordForm({ token }: { token: string }) {
           <span className="text-[0.9375rem] font-semibold text-[var(--ink)]">SmartFuel</span>
         </div>
 
-        <h1 className="mt-6 text-[1.5rem] font-semibold tracking-[-0.025em] text-[var(--ink)]">Choose a new password</h1>
+        <h1 className="mt-6 text-[1.5rem] font-semibold tracking-[-0.025em] text-[var(--ink)]">
+          {activating ? "Activate your account" : "Choose a new password"}
+        </h1>
         <p className="mt-1.5 text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
-          Your new password must be at least 10 characters long. You'll stay signed in on this device after resetting.
+          {activating
+            ? "Set a password of at least 10 characters to activate your SmartFuel account. This one-time link expires after 24 hours."
+            : "Your new password must be at least 10 characters long."}
         </p>
 
         {done ? (
           <div className="mt-6">
-            <Notice tone="ok" title="Password updated">
+            <Notice tone="ok" title={activating ? "Account activated" : "Password updated"}>
               Redirecting you to the sign-in screen…
             </Notice>
           </div>
@@ -111,7 +116,7 @@ export function ResetPasswordForm({ token }: { token: string }) {
               />
             </Field>
             <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}>
-              Update password
+              {activating ? "Activate account" : "Update password"}
             </Button>
           </form>
         )}

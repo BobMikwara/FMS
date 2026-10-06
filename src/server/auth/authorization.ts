@@ -13,6 +13,11 @@ export function hasOrganizationWideStationAccess(user: SessionUser): boolean {
   return isPlatformOwner(user.roleKey) || user.roleKey === "admin";
 }
 
+/** Non-administrator roles must always have at least one station assignment. */
+export function roleRequiresStationAssignment(roleKey: string): boolean {
+  return roleKey !== "admin" && !isPlatformOwner(roleKey);
+}
+
 /**
  * Returns `undefined` only for an organization-wide user. An empty array is a
  * meaningful deny-all scope and must not be converted to `undefined` by callers.

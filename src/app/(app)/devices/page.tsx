@@ -49,7 +49,7 @@ export default async function DevicesPage() {
     <div className="space-y-5">
       <PageHeader
         title="Devices"
-        description="Fuel probes and GPS trackers. Each device authenticates with its own API key and normalises its vendor payload before it reaches the engine."
+        description="Fuel probes authenticate and submit tank readings. GPS trackers can be registered and assigned, but position ingestion and live tracking are not enabled in this build."
         actions={hasPermission(user, "devices.create") ? (
           <a href="/devices/new" className="btn btn-primary btn-sm">
             Register device

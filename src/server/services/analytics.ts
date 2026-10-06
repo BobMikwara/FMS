@@ -8,7 +8,10 @@ import {
   getFuelType,
 } from "../db/repo/stations";
 import { listAllDevices, listAllVehicles } from "../db/repo/devices";
-import { getOrganization } from "../db/repo/core";
+import { getOrganization, getSettings } from "../db/repo/core";
+import { resolveOperatorSettings } from "../domain/system-config";
+import { telemetryFreshness } from "../domain/device-freshness";
+import { dayStartInTimeZone, localBucketKeyInTimeZone, normalizeTimeZone } from "./time-zone";
 import {
   listAlerts,
   listAlertRules,
@@ -34,10 +37,8 @@ import type { Alert, Device, Station, Tank } from "../domain/types";
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
-export function dayStart(offsetDays = 0): string {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return new Date(d.getTime() + offsetDays * DAY).toISOString();
+export function dayStart(offsetDays = 0, timeZone = "Africa/Dar_es_Salaam", at = new Date()): string {
+  return dayStartInTimeZone(at, offsetDays, timeZone).toISOString();
 }
 
 /** Device statuses that mean "this device is not reporting" (see DeviceFilter.reporting). */
@@ -48,21 +49,27 @@ export interface DateRange {
   to: string;
 }
 
-export function rangeFor(period: "today" | "7d" | "30d" | "90d" | "custom", from?: string, to?: string): DateRange {
+export function rangeFor(
+  period: "today" | "7d" | "30d" | "90d" | "custom",
+  from?: string,
+  to?: string,
+  timeZone = "Africa/Dar_es_Salaam",
+): DateRange {
+  const zone = normalizeTimeZone(timeZone);
   const now = new Date().toISOString();
   switch (period) {
     case "today":
-      return { from: dayStart(0), to: now };
+      return { from: dayStart(0, zone), to: now };
     case "7d":
-      return { from: new Date(Date.now() - 7 * DAY).toISOString(), to: now };
+      return { from: dayStart(-6, zone), to: now };
     case "30d":
-      return { from: new Date(Date.now() - 30 * DAY).toISOString(), to: now };
+      return { from: dayStart(-29, zone), to: now };
     case "90d":
-      return { from: new Date(Date.now() - 90 * DAY).toISOString(), to: now };
+      return { from: dayStart(-89, zone), to: now };
     case "custom":
-      return { from: from ?? dayStart(-7), to: to ?? now };
+      return { from: from ?? dayStart(-7, zone), to: to ?? now };
     default:
-      return { from: dayStart(0), to: now };
+      return { from: dayStart(0, zone), to: now };
   }
 }
 
@@ -89,6 +96,12 @@ export interface StationSummary {
 
 export interface DashboardData {
   generatedAt: string;
+  timeZone: string;
+  telemetry: {
+    latestValidAt: string | null;
+    liveWithinSeconds: number;
+    staleAfterSeconds: number;
+  };
   range: DateRange;
   period: string;
   kpis: {
@@ -155,18 +168,24 @@ export async function buildDashboard(
   orgId: string,
   period: "today" | "7d" | "30d" | "90d" = "7d",
   stationIds?: string[],
+  timeZoneOverride?: string,
 ): Promise<DashboardData> {
-  const range = rangeFor(period);
-  const today = rangeFor("today");
-  const organization = (await getOrganization(orgId));
+  const [organization, storedSettings, allStations, allTanks, fuelTypes, allDevices, allVehicles] = await Promise.all([
+    getOrganization(orgId),
+    getSettings(orgId),
+    listAllStations(orgId),
+    listAllTanks(orgId),
+    listFuelTypes(orgId),
+    listAllDevices(orgId),
+    listAllVehicles(orgId),
+  ]);
+  const timeZone = normalizeTimeZone(timeZoneOverride ?? organization?.timezone);
+  const range = rangeFor(period, undefined, undefined, timeZone);
+  const today = rangeFor("today", undefined, undefined, timeZone);
+  const operatorSettings = resolveOperatorSettings(storedSettings);
   const scopedStationIds = stationIds;
-  const allStations = await listAllStations(orgId);
   const stations = scopedStationIds !== undefined ? allStations.filter((station) => scopedStationIds.includes(station.id)) : allStations;
-  const allTanks = await listAllTanks(orgId);
   const tanks = scopedStationIds !== undefined ? allTanks.filter((tank) => scopedStationIds.includes(tank.stationId)) : allTanks;
-  const fuelTypes = (await listFuelTypes(orgId));
-  const allDevices = await listAllDevices(orgId);
-  const allVehicles = await listAllVehicles(orgId);
   const tankIds = new Set(tanks.map((tank) => tank.id));
   const vehicleIds = new Set(
     scopedStationIds === undefined
@@ -190,15 +209,12 @@ export async function buildDashboard(
 
   const fuelTypeById = new Map(fuelTypes.map((f) => [f.id, f]));
   const stationById = new Map(stations.map((s) => [s.id, s]));
-
-  const alertsToday = (await listAlerts({
-    orgId,
-    status: "active",
-    from: dayStart(0),
-    to: new Date().toISOString(),
-    pageSize: 200,
-    stationIds: scopedStationIds,
-  }));
+  const stationScopeSql = scopedStationIds === undefined
+    ? ""
+    : scopedStationIds.length === 0
+      ? " AND 1 = 0"
+      : ` AND station_id IN (${scopedStationIds.map(() => "?").join(", ")})`;
+  const stationScopeParams = scopedStationIds?.length ? scopedStationIds : [];
 
   const activeAlerts = (await listAlerts({ orgId, status: "active", pageSize: 200, stationIds: scopedStationIds }));
   const todayTotals = (await movementTotals(orgId, today.from, today.to, undefined, undefined, scopedStationIds));
@@ -211,26 +227,68 @@ export async function buildDashboard(
   const onlineDevices = probes.filter((d) => !NOT_REPORTING.has(d.status)).length;
   const offlineDevices = probes.filter((d) => NOT_REPORTING.has(d.status)).length;
 
+  const [activeAlertGroups, stationMovementGroups] = await Promise.all([
+    query<{ station_id: string; severity: string; n: number }>(
+      `SELECT station_id, severity, count(*) AS n FROM alerts
+       WHERE organization_id = ? AND status = 'active'${stationScopeSql}
+       GROUP BY station_id, severity`,
+      [orgId, ...stationScopeParams],
+    ),
+    query<{ station_id: string; consumption: number; refills: number }>(
+      `SELECT station_id,
+              COALESCE(SUM(CASE WHEN type = 'consumption' THEN volume ELSE 0 END), 0) AS consumption,
+              COALESCE(SUM(CASE WHEN type = 'refill' THEN volume ELSE 0 END), 0) AS refills
+       FROM fuel_events WHERE organization_id = ? AND ts >= ? AND ts <= ?${stationScopeSql}
+       GROUP BY station_id`,
+      [orgId, today.from, today.to, ...stationScopeParams],
+    ),
+  ]);
+  const alertsByStation = new Map<string, number>();
+  let criticalAlertCount = 0;
+  let warningAlertCount = 0;
+  for (const group of activeAlertGroups) {
+    const count = Number(group.n ?? 0);
+    alertsByStation.set(group.station_id, (alertsByStation.get(group.station_id) ?? 0) + count);
+    if (group.severity === "critical") criticalAlertCount += count;
+    if (group.severity === "warning") warningAlertCount += count;
+  }
+  const movementsByStation = new Map(stationMovementGroups.map((group) => [group.station_id, {
+    consumption: Number(group.consumption ?? 0),
+    refills: Number(group.refills ?? 0),
+  }]));
+  const tanksByStation = new Map<string, Tank[]>();
+  for (const tank of tanks) {
+    const group = tanksByStation.get(tank.stationId) ?? [];
+    group.push(tank);
+    tanksByStation.set(tank.stationId, group);
+  }
+  const probesByStation = new Map<string, Device[]>();
+  for (const device of probes) {
+    if (!device.stationId) continue;
+    const group = probesByStation.get(device.stationId) ?? [];
+    group.push(device);
+    probesByStation.set(device.stationId, group);
+  }
+
   /* ---- station summaries ---- */
-  const stationsSummary: StationSummary[] = await Promise.all(stations.map(async (station) => {
-    const stationTanks = tanks.filter((t) => t.stationId === station.id);
-    const totalFuel = stationTanks.reduce((sum, t) => sum + t.currentVolume, 0);
-    const capacity = stationTanks.reduce((sum, t) => sum + t.capacity, 0);
+  const stationsSummary: StationSummary[] = stations.map((station) => {
+    const stationTanks = tanksByStation.get(station.id) ?? [];
+    const totalFuel = stationTanks.reduce((sum, tank) => sum + tank.currentVolume, 0);
+    const capacity = stationTanks.reduce((sum, tank) => sum + tank.capacity, 0);
     const utilizationPct = capacity > 0 ? (totalFuel / capacity) * 100 : 0;
-    const avgLevelPct =
-      stationTanks.length > 0
-        ? stationTanks.reduce((sum, t) => sum + (t.capacity > 0 ? (t.currentVolume / t.capacity) * 100 : 0), 0) /
-          stationTanks.length
-        : 0;
-    const stationDevices = probes.filter((d) => d.stationId === station.id);
-    const stationAlerts = (await listAlerts({ orgId, stationId: station.id, status: "active", pageSize: 200 })).total;
-    const stToday = (await movementTotals(orgId, today.from, today.to, station.id));
+    const avgLevelPct = stationTanks.length > 0
+      ? stationTanks.reduce((sum, tank) => sum + (tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0), 0) / stationTanks.length
+      : 0;
+    const stationDevices = probesByStation.get(station.id) ?? [];
+    const stationMovements = movementsByStation.get(station.id) ?? { consumption: 0, refills: 0 };
+    const hasDevices = stationDevices.length > 0;
     const worst =
-      stationTanks.some((t) => t.status === "offline") || stationDevices.every((d) => d.status !== "online" && stationDevices.length > 0)
+      stationTanks.some((tank) => tank.status === "offline") ||
+      (hasDevices && stationDevices.every((device) => device.status !== "online"))
         ? "offline"
-        : stationTanks.some((t) => t.status === "critical")
+        : stationTanks.some((tank) => tank.status === "critical")
           ? "critical"
-          : stationTanks.some((t) => t.status === "low")
+          : stationTanks.some((tank) => tank.status === "low")
             ? "warning"
             : "online";
     return {
@@ -240,21 +298,21 @@ export async function buildDashboard(
       capacity,
       utilizationPct,
       avgLevelPct,
-      lowTanks: stationTanks.filter((t) => t.status === "low").length,
-      criticalTanks: stationTanks.filter((t) => t.status === "critical").length,
-      activeAlerts: stationAlerts,
-      onlineDevices: stationDevices.filter((d) => !NOT_REPORTING.has(d.status)).length,
-      offlineDevices: stationDevices.filter((d) => NOT_REPORTING.has(d.status)).length,
-      todayConsumption: stToday.consumption,
-      todayRefills: stToday.refills,
+      lowTanks: stationTanks.filter((tank) => tank.status === "low").length,
+      criticalTanks: stationTanks.filter((tank) => tank.status === "critical").length,
+      activeAlerts: alertsByStation.get(station.id) ?? 0,
+      onlineDevices: stationDevices.filter((device) => !NOT_REPORTING.has(device.status)).length,
+      offlineDevices: stationDevices.filter((device) => NOT_REPORTING.has(device.status)).length,
+      todayConsumption: stationMovements.consumption,
+      todayRefills: stationMovements.refills,
       status: worst,
     };
-  }));
+  });
 
   /* ---- charts ---- */
   const granularity: "hour" | "day" = period === "today" ? "hour" : "day";
-  const levelTrend = (await levelSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds));
-  const movements = (await movementSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds));
+  const levelTrend = (await levelSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds, timeZone));
+  const movements = (await movementSeries(orgId, range.from, range.to, granularity, undefined, undefined, scopedStationIds, timeZone));
   const consumptionTrend = movements.map((m) => ({
     bucket: m.bucket,
     consumption: m.consumption,
@@ -295,29 +353,40 @@ export async function buildDashboard(
     .sort((a, b) => a.percent - b.percent)
     .slice(0, 12);
 
-  const stationScopeSql = scopedStationIds === undefined
-    ? ""
-    : scopedStationIds.length === 0
-      ? " AND 1 = 0"
-      : ` AND station_id IN (${scopedStationIds.map(() => "?").join(", ")})`;
-  const stationScopeParams = scopedStationIds?.length ? scopedStationIds : [];
-  const lossSeries = (await query<{ bucket: string; loss: number }>(
-    `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', ts) AS bucket,
+  const rawLossSeries = await query<{ bucket: string; loss: number }>(
+    `SELECT strftime('%Y-%m-%dT%H:00', ts) AS bucket,
             COALESCE(SUM(CASE WHEN type = 'anomaly' THEN volume ELSE 0 END), 0) AS loss
      FROM fuel_events WHERE organization_id = ? AND ts >= ? AND ts <= ?${stationScopeSql}
      GROUP BY bucket ORDER BY bucket ASC`,
     [orgId, range.from, range.to, ...stationScopeParams],
-  ));
+  );
+  const lossByBucket = new Map<string, number>();
+  for (const row of rawLossSeries) {
+    const bucket = localBucketKeyInTimeZone(new Date(`${row.bucket}:00Z`), granularity, timeZone);
+    lossByBucket.set(bucket, (lossByBucket.get(bucket) ?? 0) + Number(row.loss ?? 0));
+  }
+  const lossSeries = [...lossByBucket.entries()]
+    .map(([bucket, loss]) => ({ bucket, loss }))
+    .sort((left, right) => left.bucket.localeCompare(right.bucket));
 
-  const alertFrequency = (await query<{ bucket: string; critical: number; warning: number; info: number }>(
-    `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', created_at) AS bucket,
-            COALESCE(SUM(CASE WHEN severity = 'critical' THEN 1 ELSE 0 END), 0) AS critical,
-            COALESCE(SUM(CASE WHEN severity = 'warning' THEN 1 ELSE 0 END), 0) AS warning,
-            COALESCE(SUM(CASE WHEN severity = 'info' THEN 1 ELSE 0 END), 0) AS info
+  const rawAlertFrequency = await query<{ bucket: string; severity: string; n: number }>(
+    `SELECT strftime('%Y-%m-%dT%H:00', created_at) AS bucket, severity, count(*) AS n
      FROM alerts WHERE organization_id = ? AND created_at >= ? AND created_at <= ?${stationScopeSql}
-     GROUP BY bucket ORDER BY bucket ASC`,
+     GROUP BY bucket, severity ORDER BY bucket ASC`,
     [orgId, range.from, range.to, ...stationScopeParams],
-  ));
+  );
+  const alertsByBucket = new Map<string, { critical: number; warning: number; info: number }>();
+  for (const row of rawAlertFrequency) {
+    const bucket = localBucketKeyInTimeZone(new Date(`${row.bucket}:00Z`), granularity, timeZone);
+    const counts = alertsByBucket.get(bucket) ?? { critical: 0, warning: 0, info: 0 };
+    if (row.severity === "critical") counts.critical += Number(row.n ?? 0);
+    if (row.severity === "warning") counts.warning += Number(row.n ?? 0);
+    if (row.severity === "info") counts.info += Number(row.n ?? 0);
+    alertsByBucket.set(bucket, counts);
+  }
+  const alertFrequency = [...alertsByBucket.entries()]
+    .map(([bucket, counts]) => ({ bucket, ...counts }))
+    .sort((left, right) => left.bucket.localeCompare(right.bucket));
 
   /* ---- recent movements ---- */
   const movementsPage = (await listEvents({
@@ -358,9 +427,23 @@ export async function buildDashboard(
 
   const totalFuel = tanks.reduce((sum, t) => sum + t.currentVolume, 0);
   const totalCapacity = tanks.reduce((sum, t) => sum + t.capacity, 0);
+  const latestValidAt = probes.reduce<string | null>((latest, device) => {
+    if (!device.lastSeenAt) return latest;
+    if (!latest || Date.parse(device.lastSeenAt) > Date.parse(latest)) return device.lastSeenAt;
+    return latest;
+  }, null);
+  const recentProbes = [...probes]
+    .sort((left, right) => Date.parse(right.lastSeenAt ?? "") - Date.parse(left.lastSeenAt ?? ""))
+    .slice(0, 8);
 
   return {
     generatedAt: new Date().toISOString(),
+    timeZone,
+    telemetry: {
+      latestValidAt,
+      liveWithinSeconds: Math.ceil(operatorSettings.readingIntervalSec * 1.5),
+      staleAfterSeconds: operatorSettings.offlineTimeoutMin * 60,
+    },
     range,
     period,
     kpis: {
@@ -376,8 +459,8 @@ export async function buildDashboard(
       lowFuelTanks: tanks.filter((t) => t.status === "low").length,
       criticalFuelTanks: tanks.filter((t) => t.status === "critical").length,
       activeAlerts: activeAlerts.total,
-      criticalAlerts: activeAlerts.rows.filter((a) => a.severity === "critical").length,
-      warningAlerts: activeAlerts.rows.filter((a) => a.severity === "warning").length,
+      criticalAlerts: criticalAlertCount,
+      warningAlerts: warningAlertCount,
       todayConsumption: Math.round(todayTotals.consumption),
       todayRefills: Math.round(todayTotals.refills),
       refillCount: todayTotals.refillCount,
@@ -401,7 +484,7 @@ export async function buildDashboard(
     },
     alerts: activeAlerts.rows.slice(0, 6),
     recentMovements,
-    deviceHealth: probes.slice(0, 8),
+    deviceHealth: recentProbes,
     lowTanks: tanks
       .filter((t) => t.status === "low" || t.status === "critical" || t.status === "offline")
       .sort((a, b) => a.currentVolume / (a.capacity || 1) - b.currentVolume / (b.capacity || 1)),
@@ -423,7 +506,7 @@ export interface TankDetail {
   fillPercent: number;
   remainingCapacity: number;
   status: Tank["status"];
-  dataState: "live" | "delayed" | "stale" | "offline";
+  dataState: "live" | "delayed" | "stale" | "unknown";
   lastUpdateAgeMinutes: number;
   todayConsumption: number;
   todayRefills: number;
@@ -438,43 +521,107 @@ export interface TankDetail {
 export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30d" | "90d" = "7d"): Promise<TankDetail | null> {
   const tank = (await getTank(tankId));
   if (!tank) return null;
-  const station = (await getStation(tank.stationId));
-  const fuelType = (await getFuelType(tank.fuelTypeId));
-  const devices = (await listAllDevices(tank.organizationId));
-  const device = devices.find((d) => d.tankId === tank.id && d.type === "fuel_probe") ?? null;
-  const latestReading = (await latestReadingForTank(tank.id));
+  const [station, organization, storedSettings, fuelType, devices, latestReading] = await Promise.all([
+    getStation(tank.stationId),
+    getOrganization(tank.organizationId),
+    getSettings(tank.organizationId),
+    getFuelType(tank.fuelTypeId),
+    listAllDevices(tank.organizationId),
+    latestReadingForTank(tank.id),
+  ]);
+  const timeZone = normalizeTimeZone(station?.timezone ?? organization?.timezone);
+  const operatorSettings = resolveOperatorSettings(storedSettings);
+  const device = devices.find((entry) => entry.tankId === tank.id && entry.type === "fuel_probe") ?? null;
 
   const fillPercent = tank.capacity > 0 ? (tank.currentVolume / tank.capacity) * 100 : 0;
   const remainingCapacity = Math.max(0, tank.capacity - tank.currentVolume);
 
-  const lastUpdate = tank.lastReadingAt ? new Date(tank.lastReadingAt) : null;
+  const lastValidAt = device?.lastSeenAt ?? tank.lastValidReadingAt ?? null;
+  const lastUpdate = lastValidAt ? new Date(lastValidAt) : null;
   const lastUpdateAgeMinutes = lastUpdate ? (Date.now() - lastUpdate.getTime()) / 60000 : Infinity;
-  const dataState: TankDetail["dataState"] =
-    !device || device.status === "offline" || !Number.isFinite(lastUpdateAgeMinutes)
-      ? "offline"
-      : lastUpdateAgeMinutes > 30
-        ? "stale"
-        : lastUpdateAgeMinutes > 3
-          ? "delayed"
-          : "live";
+  const dataState = telemetryFreshness(lastValidAt, {
+    liveWithinSeconds: Math.ceil(operatorSettings.readingIntervalSec * 1.5),
+    staleAfterSeconds: operatorSettings.offlineTimeoutMin * 60,
+  });
 
-  const today = rangeFor("today");
-  const range = rangeFor(period === "24h" ? "today" : (period.toLowerCase() as "7d" | "30d" | "90d"));
-  const totals = (await movementTotals(tank.organizationId, range.from, range.to, undefined, tank.id));
+  const today = rangeFor("today", undefined, undefined, timeZone);
+  const range = period === "24h"
+    ? { from: new Date(Date.now() - DAY).toISOString(), to: new Date().toISOString() }
+    : rangeFor(period.toLowerCase() as "7d" | "30d" | "90d", undefined, undefined, timeZone);
   const granularity: "hour" | "day" = period === "24h" ? "hour" : "day";
 
-  const history = (await query<{ bucket: string; avgVolume: number; avgPercent: number; avgTemp: number; avgWater: number }>(
-    `SELECT strftime('${granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d"}', ts) AS bucket,
-            AVG(volume_liters) AS avgVolume,
-            AVG(level_percent) AS avgPercent,
-            AVG(temperature_c) AS avgTemp,
-            AVG(water_level_mm) AS avgWater
-     FROM readings WHERE tank_id = ? AND ts >= ? AND ts <= ?
-     GROUP BY bucket ORDER BY bucket ASC`,
-    [tank.id, range.from, range.to],
-  ));
+  const [todayTotals, historyHours, eventsPage, alertsResult, rawRecentReadings, coverage, reconciliation] = await Promise.all([
+    movementTotals(tank.organizationId, today.from, today.to, undefined, tank.id),
+    query<{
+      bucket: string;
+      volumeTotal: number;
+      volumeCount: number;
+      percentTotal: number | null;
+      percentCount: number;
+      tempTotal: number | null;
+      tempCount: number;
+      waterTotal: number | null;
+      waterCount: number;
+    }>(
+      `SELECT strftime('%Y-%m-%dT%H:00', ts) AS bucket,
+              COALESCE(SUM(volume_liters), 0) AS volumeTotal,
+              COUNT(*) AS volumeCount,
+              SUM(level_percent) AS percentTotal,
+              COUNT(level_percent) AS percentCount,
+              SUM(temperature_c) AS tempTotal,
+              COUNT(temperature_c) AS tempCount,
+              SUM(water_level_mm) AS waterTotal,
+              COUNT(water_level_mm) AS waterCount
+       FROM readings WHERE tank_id = ? AND ts >= ? AND ts <= ?
+       GROUP BY bucket ORDER BY bucket ASC`,
+      [tank.id, range.from, range.to],
+    ),
+    listEvents({ orgId: tank.organizationId, tankId: tank.id, page: 1, pageSize: 40 }),
+    listAlerts({ orgId: tank.organizationId, tankId: tank.id, pageSize: 50 }),
+    query<Record<string, unknown>>(
+      `SELECT r.*, d.serial_number AS device_serial FROM readings r JOIN devices d ON d.id = r.device_id
+       WHERE r.tank_id = ? ORDER BY r.ts DESC LIMIT 40`,
+      [tank.id],
+    ),
+    stockCoverage(tank.id, 7, timeZone),
+    reconcileTank(tank.id, range.from, range.to, operatorSettings.reconciliationVariancePct),
+  ]);
+  const historyGroups = new Map<string, {
+    volumeTotal: number;
+    volumeCount: number;
+    percentTotal: number;
+    percentCount: number;
+    tempTotal: number;
+    tempCount: number;
+    waterTotal: number;
+    waterCount: number;
+  }>();
+  for (const row of historyHours) {
+    const bucket = localBucketKeyInTimeZone(new Date(`${row.bucket}:00Z`), granularity, timeZone);
+    const totals = historyGroups.get(bucket) ?? {
+      volumeTotal: 0, volumeCount: 0, percentTotal: 0, percentCount: 0,
+      tempTotal: 0, tempCount: 0, waterTotal: 0, waterCount: 0,
+    };
+    totals.volumeTotal += Number(row.volumeTotal ?? 0);
+    totals.volumeCount += Number(row.volumeCount ?? 0);
+    totals.percentTotal += Number(row.percentTotal ?? 0);
+    totals.percentCount += Number(row.percentCount ?? 0);
+    totals.tempTotal += Number(row.tempTotal ?? 0);
+    totals.tempCount += Number(row.tempCount ?? 0);
+    totals.waterTotal += Number(row.waterTotal ?? 0);
+    totals.waterCount += Number(row.waterCount ?? 0);
+    historyGroups.set(bucket, totals);
+  }
+  const history = [...historyGroups.entries()]
+    .map(([bucket, totals]) => ({
+      bucket,
+      avgVolume: totals.volumeCount ? totals.volumeTotal / totals.volumeCount : 0,
+      avgPercent: totals.percentCount ? totals.percentTotal / totals.percentCount : 0,
+      avgTemp: totals.tempCount ? totals.tempTotal / totals.tempCount : 0,
+      avgWater: totals.waterCount ? totals.waterTotal / totals.waterCount : 0,
+    }))
+    .sort((left, right) => left.bucket.localeCompare(right.bucket));
 
-  const eventsPage = (await listEvents({ orgId: tank.organizationId, tankId: tank.id, page: 1, pageSize: 40 }));
   const events: MovementRow[] = eventsPage.rows.map((ev) => ({
     id: ev.id,
     ts: ev.ts,
@@ -495,13 +642,9 @@ export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30
     fuelColor: fuelType?.color ?? "#64748b",
   }));
 
-  const alerts = (await listAlerts({ orgId: tank.organizationId, tankId: tank.id, pageSize: 50 })).rows;
+  const alerts = alertsResult.rows;
 
-  const recentReadings = (await query<Record<string, unknown>>(
-    `SELECT r.*, d.serial_number AS device_serial FROM readings r JOIN devices d ON d.id = r.device_id
-     WHERE r.tank_id = ? ORDER BY r.ts DESC LIMIT 40`,
-    [tank.id],
-  )).map((row) => ({
+  const recentReadings = rawRecentReadings.map((row) => ({
     id: String(row.id),
     ts: String(row.ts),
     volumeLiters: Number(row.volume_liters),
@@ -524,10 +667,10 @@ export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30
     status: tank.status,
     dataState,
     lastUpdateAgeMinutes: Number.isFinite(lastUpdateAgeMinutes) ? lastUpdateAgeMinutes : 9999,
-    todayConsumption: Math.round(totals.consumption),
-    todayRefills: Math.round(totals.refills),
-    coverage: (await stockCoverage(tank.id)),
-    reconciliation: (await reconcileTank(tank.id, range.from, range.to)),
+    todayConsumption: Math.round(todayTotals.consumption),
+    todayRefills: Math.round(todayTotals.refills),
+    coverage,
+    reconciliation,
     events,
     alerts,
     history,
@@ -542,17 +685,24 @@ export async function buildTankDetail(tankId: string, period: "24h" | "7d" | "30
 export async function buildStationDetail(stationId: string, period: "today" | "7d" | "30d" = "7d") {
   const station = (await getStation(stationId));
   if (!station) return null;
-  const tanks = (await listAllTanks(station.organizationId, station.isArchived)).filter((t) => t.stationId === station.id);
-  const fuelTypes = (await listFuelTypes(station.organizationId));
-  const devices = (await listAllDevices(station.organizationId)).filter((d) => d.stationId === station.id);
-  const range = rangeFor(period);
-  const today = rangeFor("today");
-  const totals = (await movementTotals(station.organizationId, range.from, range.to, station.id));
-  const todayTotals = (await movementTotals(station.organizationId, today.from, today.to, station.id));
-  const alerts = (await listAlerts({ orgId: station.organizationId, stationId: station.id, pageSize: 100 }));
-  const totalFuel = tanks.reduce((s, t) => s + t.currentVolume, 0);
-  const capacity = tanks.reduce((s, t) => s + t.capacity, 0);
-  const movements = (await listEvents({ orgId: station.organizationId, stationId: station.id, page: 1, pageSize: 12 }));
+  const timeZone = normalizeTimeZone(station.timezone);
+  const range = rangeFor(period, undefined, undefined, timeZone);
+  const today = rangeFor("today", undefined, undefined, timeZone);
+  const [allTanks, fuelTypes, allDevices] = await Promise.all([
+    listAllTanks(station.organizationId, station.isArchived),
+    listFuelTypes(station.organizationId),
+    listAllDevices(station.organizationId),
+  ]);
+  const tanks = allTanks.filter((tank) => tank.stationId === station.id);
+  const devices = allDevices.filter((device) => device.stationId === station.id);
+  const [totals, todayTotals, alerts, movements] = await Promise.all([
+    movementTotals(station.organizationId, range.from, range.to, station.id),
+    movementTotals(station.organizationId, today.from, today.to, station.id),
+    listAlerts({ orgId: station.organizationId, stationId: station.id, pageSize: 100 }),
+    listEvents({ orgId: station.organizationId, stationId: station.id, page: 1, pageSize: 12 }),
+  ]);
+  const totalFuel = tanks.reduce((sum, tank) => sum + tank.currentVolume, 0);
+  const capacity = tanks.reduce((sum, tank) => sum + tank.capacity, 0);
 
   return {
     station,
@@ -570,8 +720,26 @@ export async function buildStationDetail(stationId: string, period: "today" | "7
     rangeRefills: Math.round(totals.refills),
     rangeSuspectedLoss: Math.round(totals.suspectedLoss),
     movements: movements.rows,
-    levelTrend: (await levelSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id)),
-    movementTrend: (await movementSeries(station.organizationId, range.from, range.to, period === "today" ? "hour" : "day", station.id)),
+    levelTrend: (await levelSeries(
+      station.organizationId,
+      range.from,
+      range.to,
+      period === "today" ? "hour" : "day",
+      station.id,
+      undefined,
+      undefined,
+      timeZone,
+    )),
+    movementTrend: (await movementSeries(
+      station.organizationId,
+      range.from,
+      range.to,
+      period === "today" ? "hour" : "day",
+      station.id,
+      undefined,
+      undefined,
+      timeZone,
+    )),
   };
 }
 

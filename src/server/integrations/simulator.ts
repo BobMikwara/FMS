@@ -1,6 +1,7 @@
 import { query, queryOne } from "../db/client";
 import { getDevice, updateDevice } from "../db/repo/devices";
 import { getTank } from "../db/repo/stations";
+import { datePartsInTimeZone } from "../services/time-zone";
 import { ingestReading } from "../engine/fuel";
 
 /**
@@ -16,6 +17,7 @@ interface SimTank {
   tankId: string;
   deviceId: string;
   stationId: string;
+  timezone: string;
   capacity: number;
   volume: number;
   dailyConsumption: number;
@@ -27,13 +29,15 @@ async function loadTanks(): Promise<SimTank[]> {
     device_id: string;
     organization_id: string;
     station_id: string;
+    timezone: string;
     capacity: number;
     current_volume: number;
     daily: number;
   }>(
-    `SELECT t.id AS tank_id, d.id AS device_id, t.organization_id, t.station_id, t.capacity, t.current_volume,
+    `SELECT t.id AS tank_id, d.id AS device_id, t.organization_id, t.station_id, s.timezone, t.capacity, t.current_volume,
             COALESCE((SELECT SUM(volume) FROM fuel_events WHERE tank_id = t.id AND type='consumption' AND ts >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-7 days'))/7.0, 0) AS daily
      FROM tanks t JOIN devices d ON d.tank_id = t.id AND d.type='fuel_probe'
+     JOIN stations s ON s.id = t.station_id
      WHERE t.is_archived = 0 AND d.status = 'online'
      ORDER BY RANDOM() LIMIT 400`,
   )).map((row) => ({
@@ -41,6 +45,7 @@ async function loadTanks(): Promise<SimTank[]> {
     tankId: row.tank_id,
     deviceId: row.device_id,
     stationId: row.station_id,
+    timezone: row.timezone ?? "Africa/Dar_es_Salaam",
     capacity: Number(row.capacity),
     volume: Number(row.current_volume),
     dailyConsumption: Math.max(200, Number(row.daily ?? 0) || 1500),
@@ -50,12 +55,12 @@ async function loadTanks(): Promise<SimTank[]> {
 async function tick(): Promise<void> {
   const tanks = (await loadTanks());
   const now = new Date();
-  const hour = now.getHours();
-  // Demand curve — higher during the day, near zero at night.
-  const demand = hour >= 6 && hour <= 23 ? 1 + Math.sin(((hour - 6) / 17) * Math.PI) * 0.8 : 0.08;
   const sample = tanks.slice(0, 5);
 
   for (const sim of sample) {
+    const hour = datePartsInTimeZone(now, sim.timezone).hour;
+    // Demand curve: higher during the station's daytime, near zero at night.
+    const demand = hour >= 6 && hour <= 23 ? 1 + Math.sin(((hour - 6) / 17) * Math.PI) * 0.8 : 0.08;
     // ~1 tick per 8 seconds => hourly rate scaled to a 5-minute bucket
     const perTick = (sim.dailyConsumption / (24 * 60)) * 8 * demand;
     const next = Math.max(sim.capacity * 0.01, sim.volume - perTick - Math.random() * 4);

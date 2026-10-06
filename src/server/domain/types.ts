@@ -222,6 +222,36 @@ export interface Reading {
   raw: Record<string, unknown> | null;
 }
 
+/** A normalized GPS fix. It is stored separately from tank-fuel readings. */
+export interface NormalizedVehiclePosition {
+  ts: string;
+  latitude: number;
+  longitude: number;
+  speedKph: number | null;
+  headingDeg: number | null;
+  ignition: boolean | null;
+  odometerKm: number | null;
+  eventKey: string | null;
+  signal: number | null;
+  batteryPct: number | null;
+}
+
+export interface VehiclePosition {
+  id: string;
+  organizationId: string;
+  vehicleId: string;
+  deviceId: string;
+  ts: string;
+  receivedAt: string;
+  latitude: number;
+  longitude: number;
+  speedKph: number | null;
+  headingDeg: number | null;
+  ignition: boolean | null;
+  odometerKm: number | null;
+  eventKey: string;
+}
+
 export interface FuelEvent {
   id: string;
   ts: string;
@@ -373,6 +403,42 @@ export interface Notification {
   channel: string;
   isRead: boolean;
   createdAt: string;
+}
+
+export type DeliveryStatus = "queued" | "sending" | "delivered" | "failed" | "cancelled";
+
+export interface NotificationDelivery {
+  id: string;
+  organizationId: string;
+  notificationId: string | null;
+  scheduledReportRunId: string | null;
+  userId: string | null;
+  channel: string;
+  recipient: string;
+  status: DeliveryStatus;
+  attemptCount: number;
+  maxAttempts: number;
+  nextAttemptAt: string | null;
+  deliveredAt: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScheduledReportRun {
+  id: string;
+  organizationId: string;
+  scheduledReportId: string;
+  scheduledFor: string;
+  status: "queued" | "running" | "ready" | "failed";
+  attemptCount: number;
+  nextAttemptAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  reportId: string | null;
+  lastError: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AlertNote {

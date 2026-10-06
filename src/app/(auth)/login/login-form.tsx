@@ -7,6 +7,7 @@ import { Field, Input, Checkbox } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/layout";
 import { Icon } from "@/components/layout/icons";
+import { ShieldCheck } from "lucide-react";
 
 const DEMO_ACCOUNTS = [
   { email: "george@puma.co.tz", label: "George Mushi", role: "Super Admin" },
@@ -25,6 +26,9 @@ export function LoginForm() {
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<{ email?: string; password?: string }>({});
   const [loading, setLoading] = useState(false);
+  const [mfaChallenge, setMfaChallenge] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState("");
+  const [verifyingMfa, setVerifyingMfa] = useState(false);
 
   const resetSuccess = searchParams.get("reset") === "success";
   const nextPath = searchParams.get("next") ?? "/";
@@ -56,12 +60,44 @@ export function LoginForm() {
         setError(payload?.error?.message ?? "Sign in failed. Please try again.");
         return;
       }
+      if (payload.data?.mfaRequired && payload.data?.challengeToken) {
+        setMfaChallenge(String(payload.data.challengeToken));
+        setPassword("");
+        setMfaCode("");
+        setError(null);
+        return;
+      }
       router.push(payload.data?.redirectTo ?? nextPath);
       router.refresh();
     } catch {
       setError("We couldn't reach the server. Check your connection and try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const verifyMfa = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!mfaChallenge || !mfaCode.trim()) return;
+    setError(null);
+    setVerifyingMfa(true);
+    try {
+      const response = await fetch("/api/auth/mfa/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeToken: mfaChallenge, code: mfaCode.trim() }),
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.ok) {
+        setError(payload?.error?.message ?? "The verification code was not accepted.");
+        return;
+      }
+      router.push(payload.data?.redirectTo ?? nextPath);
+      router.refresh();
+    } catch {
+      setError("We couldn't reach the server. Check your connection and try again.");
+    } finally {
+      setVerifyingMfa(false);
     }
   };
 
@@ -146,52 +182,92 @@ export function LoginForm() {
             </div>
           ) : null}
 
-          <form onSubmit={submit} className="mt-6 space-y-4" noValidate>
-            <Field label="Work email" htmlFor="email" required error={fieldErrors.email}>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                autoComplete="username"
-                placeholder="you@company.co.tz"
-                value={email}
-                invalid={Boolean(fieldErrors.email)}
-                onChange={(event) => setEmail(event.target.value)}
-                required
-              />
-            </Field>
-
-            <Field label="Password" htmlFor="password" required error={fieldErrors.password}>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                placeholder="••••••••••"
-                value={password}
-                invalid={Boolean(fieldErrors.password)}
-                onChange={(event) => setPassword(event.target.value)}
-                required
-              />
-            </Field>
-
-            <div className="flex items-center justify-between gap-3">
-              <Checkbox
-                label={<span className="text-[0.8125rem]">Keep me signed in</span>}
-                checked={remember}
-                onChange={(event) => setRemember(event.target.checked)}
-              />
-              <Link href="/forgot-password" className="text-[0.8125rem] font-medium text-[var(--brand)] hover:underline">
-                Forgot password?
-              </Link>
+          {mfaChallenge ? (
+            <div className="mt-6 space-y-4">
+              <div className="flex items-start gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-[var(--surface-3)] text-[var(--ink-2)]">
+                  <ShieldCheck size={17} />
+                </span>
+                <div>
+                  <h3 className="text-[0.875rem] font-semibold text-[var(--ink)]">Verify it is you</h3>
+                  <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">
+                    Enter a current authenticator code or one unused recovery code to finish signing in.
+                  </p>
+                </div>
+              </div>
+              <form onSubmit={verifyMfa} className="space-y-4">
+                <Field label="Authenticator or recovery code" htmlFor="mfa-code" hint="Authenticator codes have six digits. Recovery codes look like XXXXX-XXXXX.">
+                  <Input
+                    id="mfa-code"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    value={mfaCode}
+                    onChange={(event) => setMfaCode(event.target.value.slice(0, 20))}
+                    required
+                  />
+                </Field>
+                <Button type="submit" variant="primary" size="lg" className="w-full" loading={verifyingMfa}>
+                  Verify and sign in
+                </Button>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm w-full"
+                  disabled={verifyingMfa}
+                  onClick={() => { setMfaChallenge(null); setMfaCode(""); setError(null); }}
+                >
+                  Back to password sign-in
+                </button>
+              </form>
             </div>
+          ) : (
+            <form onSubmit={submit} className="mt-6 space-y-4" noValidate>
+              <Field label="Work email" htmlFor="email" required error={fieldErrors.email}>
+                <Input
+                  id="email"
+                  name="email"
+                  type="email"
+                  autoComplete="username"
+                  placeholder="you@company.co.tz"
+                  value={email}
+                  invalid={Boolean(fieldErrors.email)}
+                  onChange={(event) => setEmail(event.target.value)}
+                  required
+                />
+              </Field>
 
-            <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}>
-              Sign in
-            </Button>
-          </form>
+              <Field label="Password" htmlFor="password" required error={fieldErrors.password}>
+                <Input
+                  id="password"
+                  name="password"
+                  type="password"
+                  autoComplete="current-password"
+                  placeholder="••••••••••"
+                  value={password}
+                  invalid={Boolean(fieldErrors.password)}
+                  onChange={(event) => setPassword(event.target.value)}
+                  required
+                />
+              </Field>
 
-          <div className="mt-8 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3.5">
+              <div className="flex items-center justify-between gap-3">
+                <Checkbox
+                  label={<span className="text-[0.8125rem]">Keep me signed in</span>}
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
+                />
+                <Link href="/forgot-password" className="text-[0.8125rem] font-medium text-[var(--brand)] hover:underline">
+                  Forgot password?
+                </Link>
+              </div>
+
+              <Button type="submit" variant="primary" size="lg" className="w-full" loading={loading}>
+                Sign in
+              </Button>
+            </form>
+          )}
+
+          {!mfaChallenge ? (
+            <div className="mt-8 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-3.5">
             <div className="flex items-center justify-between gap-2">
               <p className="text-[0.75rem] font-semibold text-[var(--ink)]">Demo accounts</p>
               <span className="badge badge-info">Seed data</span>
@@ -216,8 +292,9 @@ export function LoginForm() {
                   </button>
                 </li>
               ))}
-            </ul>
-          </div>
+              </ul>
+            </div>
+          ) : null}
 
           <p className="mt-6 text-center text-[0.6875rem] text-[var(--ink-3)]">
             Protected by role-based access control · All actions are audit-logged

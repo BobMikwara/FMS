@@ -392,7 +392,7 @@ export function LiveIndicator({
   ageLabel,
   className,
 }: {
-  state: "live" | "delayed" | "stale" | "offline";
+  state: "live" | "delayed" | "stale" | "offline" | "unknown";
   ageLabel?: string;
   className?: string;
 }) {
@@ -401,6 +401,7 @@ export function LiveIndicator({
     delayed: { tone: "info" as StatusTone, label: "Delayed", pulse: false },
     stale: { tone: "warn" as StatusTone, label: "Stale data", pulse: false },
     offline: { tone: "crit" as StatusTone, label: "Offline", pulse: false },
+    unknown: { tone: "neutral" as StatusTone, label: "Unknown", pulse: false },
   }[state];
   return (
     <span className={cn("badge", toneClass[config.tone], className)} title={ageLabel}>
