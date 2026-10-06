@@ -17,10 +17,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/form";
 import { Modal } from "@/components/ui/overlay";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { AreaChart, type Series } from "@/components/charts/charts";
-import { TankBar, TankVisual } from "@/components/charts/tank-visual";
+import { TankBar } from "@/components/charts/tank-visual";
 import { FuelReplay } from "@/components/charts/fuel-replay";
+import { StatTile } from "./stat-tile";
+import { TankFillLevel } from "./tank-fill-level";
+import { TankUsagePanel } from "./tank-usage-panel";
 import { EventTypeBadge, ConfidenceBadge } from "@/components/domain/badges";
 import type { Tank, Station, FuelType, Device, Alert } from "@/server/domain/types";
 import { tankStateForPercent } from "@/lib/status";
@@ -89,6 +92,7 @@ const TABS = [
   { id: "overview", label: "Overview" },
   { id: "readings", label: "Readings" },
   { id: "movements", label: "Fuel movement" },
+  { id: "usage", label: "Usage" },
   { id: "replay", label: "Usage replay" },
   { id: "reconciliation", label: "Reconciliation" },
   { id: "alerts", label: "Alerts" },
@@ -138,7 +142,7 @@ export function TankDetailClient({
   const canViewReplay = canViewReadings && canViewMovements;
   const visibleTabs = TABS.filter((item) => {
     if (item.id === "readings") return canViewReadings;
-    if (item.id === "movements") return canViewMovements;
+    if (item.id === "movements" || item.id === "usage") return canViewMovements;
     if (item.id === "replay" || item.id === "reconciliation") return canViewReplay;
     if (item.id === "alerts") return canViewAlerts;
     return true;
@@ -303,13 +307,14 @@ export function TankDetailClient({
                 </span>
               </Badge>
             </div>
-            <p className="mt-1.5 max-w-xl text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
+            {/* The age text depends on the clock, so the server and the browser can disagree by a second. */}
+            <p className="mt-1.5 max-w-xl text-[0.8125rem] leading-relaxed text-[var(--ink-2)]" suppressHydrationWarning>
               {state.note}{" "}
               {latest ? `Last reading ${timeAgo(latest.ts)} (${formatDateTimeInTimeZone(latest.ts, detail.timeZone)} ${detail.timeZone}).` : "No readings received yet."}
             </p>
           </div>
-          <div className="flex flex-col items-end gap-3">
-            <div className="text-right">
+          <div className="flex flex-col items-start gap-3 sm:ml-auto sm:items-end">
+            <div className="sm:text-right">
               <p className="text-[0.6875rem] font-medium uppercase tracking-[0.12em] text-[var(--ink-3)]">Measured volume</p>
               <p className="text-num mt-1 text-[1.75rem] font-semibold leading-none tracking-[-0.03em] text-[var(--ink)]">
                 {latest ? formatNumber(Math.round(latest.volumeLiters)) : "Not available"}
@@ -326,50 +331,29 @@ export function TankDetailClient({
           </div>
         </div>
 
-        <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(19rem,22rem)_minmax(0,1fr)]">
-          <div className="grid min-w-0 items-center gap-5 sm:grid-cols-[auto_minmax(0,1fr)]">
-            <TankVisual
-              name={tank.name}
-              fuelType={fuelType?.systemName ?? "fuel"}
-              fuelLabel={fuelType?.displayName}
-              color={fuelType?.color ?? "#0f766e"}
-              volume={latest?.volumeLiters ?? 0}
-              capacity={tank.capacity}
-              status={visualStatus}
-              lowThresholdPct={tank.lowThresholdPct}
-              criticalThresholdPct={tank.criticalThresholdPct}
-              overfillThresholdPct={tank.overfillThresholdPct}
-              dataState={detail.dataState}
-              size="md"
-              showMarkings
-            />
-            <div className="min-w-0 flex-1 space-y-3">
-              <Metric label="Fill level" value={formatPercent(detail.fillPercent, 1)} />
-              <Metric label="Free capacity" value={`${formatNumber(Math.round(detail.remainingCapacity))} L`} />
-              {canViewMovements && detail.coverage ? (
-                <Metric
-                  label="Stock coverage"
-                  value={detail.coverage.daysRemaining == null ? "Not available" : `${detail.coverage.daysRemaining.toFixed(1)} days`}
-                  hint={
-                    detail.coverage.avgDailyConsumption > 0
-                      ? `${formatNumber(Math.round(detail.coverage.avgDailyConsumption))} L/day average`
-                      : "No consumption recorded yet"
-                  }
-                />
-              ) : null}
-            </div>
-          </div>
+        <div className="mt-5 grid min-w-0 gap-5 xl:grid-cols-[minmax(21rem,24rem)_minmax(0,1fr)]">
+          <TankFillLevel
+            tank={tank}
+            fuelType={fuelType}
+            deviceSerial={device?.serialNumber ?? null}
+            status={visualStatus}
+            dataState={detail.dataState}
+            volumeLiters={latest?.volumeLiters ?? null}
+            fillPercent={detail.fillPercent}
+            remainingCapacityLiters={detail.remainingCapacity}
+            coverage={canViewMovements ? detail.coverage : null}
+          />
 
           {canViewMovements ? (
             <div className="grid gap-4 sm:grid-cols-3">
-              <Tile
+              <StatTile
                 label="Fuel consumption / tank outflow (today)"
                 value={`${formatNumber(detail.todayConsumption ?? 0)} L`}
                 tone="neutral"
               />
-              <Tile label="Refills (today)" value={`${formatNumber(detail.todayRefills ?? 0)} L`} tone="ok" />
+              <StatTile label="Refills (today)" value={`${formatNumber(detail.todayRefills ?? 0)} L`} tone="ok" />
               {canViewReadings && detail.reconciliation ? (
-                <Tile
+                <StatTile
                   label="Reconciliation variance"
                   value={`${detail.reconciliation.variance > 0 ? "+" : ""}${formatNumber(Math.round(detail.reconciliation.variance))} L`}
                   tone={detail.reconciliation.exceedsThreshold ? "warn" : "neutral"}
@@ -455,7 +439,7 @@ export function TankDetailClient({
                   <Metric label="Model" value={device.model || "Not provided"} />
                   <Metric label="Provider" value={device.provider} />
                   <Metric label="Status" value={device.status.replace("_", " ")} />
-                  <Metric label="Last seen" value={device.lastSeenAt ? timeAgo(device.lastSeenAt) : "Never"} />
+                  <Metric label="Last seen" value={device.lastSeenAt ? timeAgo(device.lastSeenAt) : "Never"} volatile />
                   <Metric label="Firmware" value={device.firmware || "Unknown"} />
                 </dl>
               ) : (
@@ -490,6 +474,7 @@ export function TankDetailClient({
 
       {tab === "readings" ? <ReadingsTable readings={detail.readings} timeZone={detail.timeZone} /> : null}
       {tab === "movements" ? <MovementsTable events={detail.events} timeZone={detail.timeZone} /> : null}
+      {tab === "usage" ? <TankUsagePanel tankId={tank.id} tankName={tank.name} timeZone={detail.timeZone} /> : null}
       {tab === "replay" ? (
         <FuelReplay
           tankId={tank.id}
@@ -636,25 +621,15 @@ export function TankDetailClient({
   );
 }
 
-function Metric({ label, value, hint }: { label: string; value: string; hint?: string }) {
+/** `volatile` marks a value that depends on the clock (such as "2 min ago"), which may differ between server and browser. */
+function Metric({ label, value, hint, volatile }: { label: string; value: string; hint?: string; volatile?: boolean }) {
   return (
     <div className="min-w-0">
       <p className="text-[0.6875rem] font-medium uppercase tracking-[0.1em] text-[var(--ink-3)]">{label}</p>
-      <p className="text-num mt-1 truncate text-[0.875rem] font-semibold text-[var(--ink)]">{value}</p>
-      {hint ? <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{hint}</p> : null}
-    </div>
-  );
-}
-
-function Tile({ label, value, tone, hint }: { label: string; value: string; tone: "ok" | "warn" | "neutral"; hint?: string }) {
-  const color = tone === "ok" ? "var(--ok)" : tone === "warn" ? "var(--warn)" : "var(--ink)";
-  return (
-    <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-4 py-3.5">
-      <p className="text-[0.6875rem] font-medium uppercase tracking-[0.1em] text-[var(--ink-3)]">{label}</p>
-      <p className="text-num mt-1.5 text-[1.125rem] font-semibold" style={{ color }}>
+      <p className="text-num mt-1 truncate text-[0.875rem] font-semibold text-[var(--ink)]" suppressHydrationWarning={volatile}>
         {value}
       </p>
-      {hint ? <p className="mt-1 text-[0.6875rem] text-[var(--ink-3)]">{hint}</p> : null}
+      {hint ? <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{hint}</p> : null}
     </div>
   );
 }
@@ -815,6 +790,7 @@ function AlertsTable({
     {
       key: "severity",
       header: "Severity",
+      minWidth: 96,
       cell: (row) => (
         <Badge tone={row.severity === "critical" ? "crit" : row.severity === "warning" ? "warn" : "info"}>{row.severity}</Badge>
       ),
@@ -822,33 +798,40 @@ function AlertsTable({
     {
       key: "title",
       header: "Alert",
+      minWidth: 200,
+      primary: true,
       cell: (row) => <span className="text-[0.8125rem] font-medium text-[var(--ink)]">{row.title}</span>,
     },
-    { key: "triggeredAt", header: "Triggered", hideOnMobile: true, cell: (row) => <span className="text-num text-[0.8125rem]">{timeAgo(row.createdAt)}</span> },
-    { key: "status", header: "Status", cell: (row) => <StatusBadge tone={alertStatusTone(row.status)}>{alertStatusLabel(row.status)}</StatusBadge> },
-    {
-      key: "actions",
-      header: "",
-      cell: (row) => canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
-        <div className="flex items-center justify-end gap-2">
-          {canNote ? (
-            <Button size="sm" variant="ghost" onClick={() => onOpenNote(row.id)}>
-              Note
-            </Button>
-          ) : null}
-          {row.status === "active" && canAcknowledge ? (
-            <Button size="sm" variant="secondary" loading={ackPending === row.id} onClick={() => onAcknowledge(row.id)}>
-              Acknowledge
-            </Button>
-          ) : null}
-          {row.status !== "resolved" && canResolve ? (
-            <Button size="sm" variant="primary" onClick={() => onResolve(row.id)}>
-              Resolve
-            </Button>
-          ) : null}
-        </div>
-      ) : null,
-    },
+    { key: "triggeredAt", header: "Triggered", minWidth: 112, hideOnMobile: true, cell: (row) => <span className="text-num text-[0.8125rem]">{timeAgo(row.createdAt)}</span> },
+    { key: "status", header: "Status", minWidth: 128, cell: (row) => <StatusBadge tone={alertStatusTone(row.status)}>{alertStatusLabel(row.status)}</StatusBadge> },
+    // Only offered when the user can act on an alert, so the heading never sits over an empty column.
+    ...(canNote || canAcknowledge || canResolve
+      ? [
+          actionsColumn<AlertRow>(
+            (row) =>
+              canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {canNote ? (
+                    <Button size="sm" variant="ghost" onClick={() => onOpenNote(row.id)}>
+                      Note
+                    </Button>
+                  ) : null}
+                  {row.status === "active" && canAcknowledge ? (
+                    <Button size="sm" variant="secondary" loading={ackPending === row.id} onClick={() => onAcknowledge(row.id)}>
+                      Acknowledge
+                    </Button>
+                  ) : null}
+                  {row.status !== "resolved" && canResolve ? (
+                    <Button size="sm" variant="primary" onClick={() => onResolve(row.id)}>
+                      Resolve
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null,
+            { minWidth: 180 },
+          ),
+        ]
+      : []),
   ];
 
   if (alerts.length === 0) {
