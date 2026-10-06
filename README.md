@@ -123,10 +123,15 @@ creates production tables during a request.
    Keep the MFA encryption key stable across deployments; changing it without re-enrolling users
    makes existing authenticator secrets unreadable. Set `CRON_SECRET` as a Vercel secret, keep
    `DEMO_SIMULATOR=off`, and do not expose Supabase service-role credentials to the browser.
-5. Deploy with the committed `vercel.json`. Its five-minute Cron invokes
-   `/api/cron/maintenance` to sweep stale devices, process due scheduled reports, send queued
-   notifications, and clean expired MFA challenges and enrollment secrets. The runtime
-   PostgreSQL client uses a small pool,
+5. Deploy with the committed `vercel.json`. Its daily Cron invokes `/api/cron/maintenance` to
+   sweep stale devices, process due scheduled reports, send queued notifications, and clean
+   expired MFA challenges and enrollment secrets. A daily schedule is the most Vercel Hobby
+   allows, and it is far too coarse for the default ten-minute device-offline threshold, so the
+   same sweep is also started by request traffic — device telemetry and authenticated API calls —
+   under a durable lease held in PostgreSQL (`MAINTENANCE_SWEEP_INTERVAL_SECONDS`, default 300,
+   minimum 60). The Cron job remains the guaranteed floor for a deployment with no traffic;
+   upgrade to Vercel Pro only if you want the Cron itself to fire more than once a day. The
+   runtime PostgreSQL client uses a small pool,
    disables prepared statements for transaction pooling, and requires TLS. Rate-limit buckets
    are stored in PostgreSQL so limits work across Vercel instances.
 
@@ -328,10 +333,11 @@ after their first valid position, and fresh telemetry resolves a matching GPS-of
 ### 3. Email, in-app notifications, and scheduled reports
 
 In-app notification read state is per user. Email attempts and scheduled-report deliveries are
-stored per recipient, with retry status and recent history in Settings. The maintenance Cron
-checks report schedules every five minutes, writes a report record for each due run, and queues
-email attachments. If SMTP is not configured, deliveries remain queued without consuming retry
-attempts. PDF-labelled reports are delivered as print-ready HTML because no PDF rendering service
+stored per recipient, with retry status and recent history in Settings. The maintenance sweep
+checks report schedules on every pass — once a day from the Vercel Hobby Cron, and in between
+whenever request traffic starts it under the shared lease — writes a report record for each due
+run, and queues email attachments. If SMTP is not configured, deliveries remain queued without
+consuming retry attempts. PDF-labelled reports are delivered as print-ready HTML because no PDF rendering service
 is configured. SMS and browser push are not active.
 
 ### 4. Account MFA and session revocation
