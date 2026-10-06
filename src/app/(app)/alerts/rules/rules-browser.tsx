@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Select, Switch } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { AlertSeverityBadge } from "@/components/domain/badges";
 import { LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -168,17 +168,18 @@ export function RulesBrowser({ initialRows, canManage }: { initialRows: RuleRow[
           </span>
         ),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => canManage ? (
-          <div className="flex items-center justify-end">
-            <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)} disabled={!row.isEnabled}>
-              Disable
-            </Button>
-          </div>
-        ) : null,
-      },
+      // Only offered to users who can manage rules, so the heading never sits over an empty column.
+      ...(canManage
+        ? [
+            actionsColumn<RuleRow>((row) => (
+              <div className="flex items-center justify-end">
+                <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)} disabled={!row.isEnabled}>
+                  Disable
+                </Button>
+              </div>
+            )),
+          ]
+        : []),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canManage],

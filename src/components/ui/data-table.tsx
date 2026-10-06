@@ -1,25 +1,27 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
-import { Button, IconButton } from "./button";
+import { columnWidth, mobileColumnsOf, tableMinWidth, type Column } from "@/lib/table-columns";
+import { Button } from "./button";
 import { Checkbox } from "./form";
 import { Skeleton, Kbd } from "./feedback";
+import { ColumnVisibilityMenu } from "./column-visibility-menu";
+import { ColumnCard } from "./data-table-mobile-card";
+import { useColumnVisibility } from "./use-column-visibility";
 
 /* -------------------------------------------------------------------------- */
 /* Column definition                                                          */
 /* -------------------------------------------------------------------------- */
 
-export interface Column<T> {
-  key: string;
-  header: string;
-  cell: (row: T) => React.ReactNode;
-  sortable?: boolean;
-  hideOnMobile?: boolean;
-  numeric?: boolean;
-  width?: string;
-  help?: string;
-}
+// Columns are defined once (see `@/lib/table-columns`). The Visible columns
+// menu, the headings, the cells and the mobile card are all derived from that
+// single list, so they stay in sync.
+export { actionsColumn } from "@/lib/table-columns";
+export type { Column } from "@/lib/table-columns";
+
+/** Width reserved for the optional row-selection checkbox column. */
+const SELECT_COLUMN_WIDTH = 36;
 
 export interface DataTableProps<T> {
   columns: Column<T>[];
@@ -41,7 +43,6 @@ export interface DataTableProps<T> {
   selectedIds?: string[];
   onSelectionChange?: (ids: string[]) => void;
   bulkActions?: (ids: string[], clear: () => void) => React.ReactNode;
-  rowActions?: (row: T) => React.ReactNode;
   emptyTitle?: string;
   emptyDescription?: string;
   emptyAction?: React.ReactNode;
@@ -73,7 +74,6 @@ export function DataTable<T>({
   selectedIds = [],
   onSelectionChange,
   bulkActions,
-  rowActions,
   emptyTitle = "Nothing to show yet",
   emptyDescription,
   emptyAction,
@@ -85,8 +85,8 @@ export function DataTable<T>({
   onRowClick,
 }: DataTableProps<T>) {
   const [localSearch, setLocalSearch] = useState(searchValue ?? "");
-  const [columnMenuOpen, setColumnMenuOpen] = useState(false);
-  const [hidden, setHidden] = useState<string[]>([]);
+  const visibility = useColumnVisibility(columns);
+  const { visibleColumns } = visibility;
 
   useEffect(() => {
     setLocalSearch(searchValue ?? "");
@@ -94,10 +94,11 @@ export function DataTable<T>({
 
   const totalRows = total ?? rows.length;
   const pageCount = Math.max(1, Math.ceil(totalRows / pageSize));
-  const visibleColumns = columns.filter((column) => !hidden.includes(column.key));
+  const mobileColumns = useMemo(() => mobileColumnsOf(visibleColumns), [visibleColumns]);
+  const minTableWidth = tableMinWidth(visibleColumns, selectable ? SELECT_COLUMN_WIDTH : 0);
   const allSelected = selectable && rows.length > 0 && rows.every((row) => selectedIds.includes(rowKey(row)));
 
-  const toggleSort = (column: Column<T>) => {
+  const toggleSort = (column: { key: string; sortable?: boolean }) => {
     if (!column.sortable || !onSortChange) return;
     const nextOrder = sort === column.key && order === "asc" ? "desc" : "asc";
     onSortChange(column.key, nextOrder);
@@ -157,55 +158,25 @@ export function DataTable<T>({
             {selectable && selectedIds.length > 0 && bulkActions ? (
               <div className="flex items-center gap-1.5">{bulkActions(selectedIds, () => onSelectionChange?.([]))}</div>
             ) : null}
-            <div className="relative">
-              <IconButton
-                label="Choose columns"
-                size="sm"
-                onClick={() => setColumnMenuOpen((value) => !value)}
-                className="h-8 w-8"
-              >
-                <svg viewBox="0 0 16 16" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M2 3.5h12M4 8h8M6.5 12.5h3" />
-                </svg>
-              </IconButton>
-              {columnMenuOpen ? (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setColumnMenuOpen(false)} />
-                  <div className="anim-scale-in absolute right-0 z-50 mt-1 max-h-[min(22rem,calc(100vh-5rem))] w-56 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[var(--shadow-pop)]">
-                    <p className="px-2 py-1 text-[0.6875rem] font-semibold uppercase tracking-wider text-[var(--ink-3)]">
-                      Visible columns
-                    </p>
-                    {columns.map((column) => (
-                      <label
-                        key={column.key}
-                        className="flex cursor-pointer items-start gap-2 rounded-lg px-2 py-1.5 text-[0.8125rem] leading-snug text-[var(--ink)] hover:bg-[var(--surface-3)]"
-                      >
-                        <input
-                          type="checkbox"
-                          className="h-3.5 w-3.5"
-                          style={{ accentColor: "var(--brand)" }}
-                          checked={!hidden.includes(column.key)}
-                          onChange={() =>
-                            setHidden((current) =>
-                              current.includes(column.key)
-                                ? current.filter((key) => key !== column.key)
-                                : [...current, column.key],
-                            )
-                          }
-                        />
-                        {column.header}
-                      </label>
-                    ))}
-                  </div>
-                </>
-              ) : null}
-            </div>
+            <ColumnVisibilityMenu
+              columns={visibility.columns}
+              hiddenKeys={visibility.hiddenKeys}
+              canToggle={visibility.canToggle}
+              onToggle={visibility.toggle}
+              // A bespoke mobile card is not column-driven, so the menu only applies from md up.
+              className={mobileCard ? "hidden md:block" : undefined}
+            />
           </div>
         </div>
       ) : null}
 
       {loading ? (
-        <TableSkeleton columns={visibleColumns.length} rows={Math.min(pageSize, 8)} dense={dense} />
+        <TableSkeleton
+          columns={visibleColumns.length}
+          labels={visibleColumns.map((column) => column.header)}
+          rows={Math.min(pageSize, 8)}
+          dense={dense}
+        />
       ) : rows.length === 0 ? (
         <div className="px-4 py-12 text-center">
           <h3 className="text-sm font-semibold text-[var(--ink)]">{emptyTitle}</h3>
@@ -219,7 +190,7 @@ export function DataTable<T>({
       ) : (
         <>
           <div className="table-wrap hidden md:block">
-            <table className="data">
+            <table className="data" style={minTableWidth ? { minWidth: minTableWidth } : undefined}>
               {caption ? <caption className="sr-only">{caption}</caption> : null}
               <thead>
                 <tr>
@@ -231,8 +202,14 @@ export function DataTable<T>({
                   {visibleColumns.map((column) => (
                     <th
                       key={column.key}
-                      className={cn(column.numeric && "text-right", column.sortable && "th-sort")}
-                      style={column.width ? { width: column.width } : undefined}
+                      scope="col"
+                      data-column={column.key}
+                      className={cn(
+                        (column.numeric || column.kind === "actions") && "text-right",
+                        column.kind === "actions" && "whitespace-nowrap",
+                        column.sortable && "th-sort",
+                      )}
+                      style={{ width: columnWidth(column) }}
                       onClick={() => toggleSort(column)}
                       title={column.help}
                       aria-sort={
@@ -251,7 +228,6 @@ export function DataTable<T>({
                       </span>
                     </th>
                   ))}
-                  {rowActions ? <th className="w-[9rem] whitespace-nowrap text-right">Actions</th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -271,15 +247,19 @@ export function DataTable<T>({
                         </td>
                       ) : null}
                       {visibleColumns.map((column) => (
-                        <td key={column.key} className={cn(column.numeric && "text-right text-num", dense && "py-2")}>
+                        <td
+                          key={column.key}
+                          data-column={column.key}
+                          className={cn(
+                            column.numeric && "text-right text-num",
+                            column.kind === "actions" && "whitespace-nowrap text-right",
+                            dense && "py-2",
+                          )}
+                          onClick={column.kind === "actions" ? (event) => event.stopPropagation() : undefined}
+                        >
                           {column.cell(row)}
                         </td>
                       ))}
-                      {rowActions ? (
-                        <td className="whitespace-nowrap text-right" onClick={(event) => event.stopPropagation()}>
-                          {rowActions(row)}
-                        </td>
-                      ) : null}
                     </tr>
                   );
                 })}
@@ -287,15 +267,13 @@ export function DataTable<T>({
             </table>
           </div>
 
-          {mobileCard ? (
-            <div className="divide-y divide-[var(--line)] md:hidden">
-              {rows.map((row) => (
-                <div key={rowKey(row)} className="p-3">
-                  {mobileCard(row)}
-                </div>
-              ))}
-            </div>
-          ) : null}
+          <div className="divide-y divide-[var(--line)] md:hidden">
+            {rows.map((row) => (
+              <div key={rowKey(row)} className="p-3">
+                {mobileCard ? mobileCard(row) : <ColumnCard row={row} columns={mobileColumns} />}
+              </div>
+            ))}
+          </div>
         </>
       )}
 
@@ -342,7 +320,18 @@ function SortIcon({ active, order }: { active: boolean; order: "asc" | "desc" })
   );
 }
 
-export function TableSkeleton({ columns, rows, dense }: { columns: number; rows: number; dense?: boolean }) {
+export function TableSkeleton({
+  columns,
+  rows,
+  dense,
+  labels,
+}: {
+  columns: number;
+  rows: number;
+  dense?: boolean;
+  /** Real headings to show while loading, so the header row never blanks out. */
+  labels?: readonly string[];
+}) {
   return (
     <div>
       <div className="hidden md:block">
@@ -350,9 +339,7 @@ export function TableSkeleton({ columns, rows, dense }: { columns: number; rows:
           <thead>
             <tr>
               {Array.from({ length: columns }).map((_, index) => (
-                <th key={index}>
-                  <Skeleton className="h-2.5 w-16" />
-                </th>
+                <th key={index}>{labels?.[index] ?? <Skeleton className="h-2.5 w-16" />}</th>
               ))}
             </tr>
           </thead>

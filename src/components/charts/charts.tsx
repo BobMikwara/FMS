@@ -44,7 +44,7 @@ function formatCompact(value: number): string {
   return value.toFixed(abs < 1 ? 2 : 1);
 }
 
-interface ChartTooltipState {
+export interface ChartTooltipState {
   visible: boolean;
   x: number;
   y: number;
@@ -52,11 +52,14 @@ interface ChartTooltipState {
   rows: { label: string; value: string; color?: string }[];
 }
 
-function ChartTooltip({ state }: { state: ChartTooltipState }) {
+export function ChartTooltip({ state, className }: { state: ChartTooltipState; className?: string }) {
   if (!state.visible) return null;
   return (
     <div
-      className="pointer-events-none absolute z-30 min-w-[8rem] -translate-x-1/2 -translate-y-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-pop)]"
+      className={cn(
+        "pointer-events-none absolute z-30 min-w-[8rem] -translate-x-1/2 -translate-y-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-2.5 py-2 shadow-[var(--shadow-pop)]",
+        className,
+      )}
       style={{ left: state.x, top: state.y - 10 }}
       role="tooltip"
     >

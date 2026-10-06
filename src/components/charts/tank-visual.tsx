@@ -24,6 +24,11 @@ export interface TankVisualProps {
   size?: "sm" | "md" | "lg" | "xl";
   showMarkings?: boolean;
   showHeader?: boolean;
+  /**
+   * Render only the vessel and its scale. The caller lays out the name, the
+   * volume readout and the status badges itself, so long names can wrap freely.
+   */
+  graphicOnly?: boolean;
   status?: "full" | "normal" | "low" | "critical" | "offline";
   lowThresholdPct?: number;
   criticalThresholdPct?: number;
@@ -53,6 +58,7 @@ export function TankVisual({
   size = "md",
   showMarkings = true,
   showHeader = true,
+  graphicOnly = false,
   status,
   lowThresholdPct = 20,
   criticalThresholdPct = 10,
@@ -98,7 +104,7 @@ export function TankVisual({
 
   return (
     <div className={cn("flex flex-col items-center", className)}>
-      {showHeader ? (
+      {showHeader && !graphicOnly ? (
         <div className="mb-2 w-full text-center">
           <p className="truncate text-[0.8125rem] font-semibold text-[var(--ink)]">{name}</p>
           <p className="text-[0.6875rem] text-[var(--ink-3)]">{fuelLabel ?? fuelType}</p>
@@ -150,14 +156,16 @@ export function TankVisual({
         </div>
       </div>
 
-      <div className="mt-2.5 w-full text-center">
-        <p className={cn("font-semibold text-num text-[var(--ink)]", dimension.value)}>
-          {formatNumber(Math.round(volume))} <span className="text-[0.6875rem] font-normal text-[var(--ink-3)]">L</span>
-        </p>
-        <p className="text-[0.6875rem] text-[var(--ink-3)] text-num">of {formatNumber(Math.round(capacity))} L</p>
-      </div>
+      {graphicOnly ? null : (
+        <div className="mt-2.5 w-full text-center">
+          <p className={cn("font-semibold text-num text-[var(--ink)]", dimension.value)}>
+            {formatNumber(Math.round(volume))} <span className="text-[0.6875rem] font-normal text-[var(--ink-3)]">L</span>
+          </p>
+          <p className="text-[0.6875rem] text-[var(--ink-3)] text-num">of {formatNumber(Math.round(capacity))} L</p>
+        </div>
+      )}
 
-      {status || dataState || temperatureC != null || waterLevelMm != null ? (
+      {!graphicOnly && (status || dataState || temperatureC != null || waterLevelMm != null) ? (
         <div className="mt-2.5 flex flex-wrap items-center justify-center gap-1.5">
           {status ? (
             <StatusBadge tone={statusTone[derivedStatus]} pulse={derivedStatus === "critical"}>

@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatNumber, formatPercent } from "@/lib/utils";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { Badge, EmptyState } from "@/components/ui/feedback";
 import { TankStatusBadge } from "@/components/domain/badges";
 import { TankVisual } from "@/components/charts/tank-visual";
@@ -123,17 +123,13 @@ export function StationTanks({
         </span>
       ),
     },
-    {
-      key: "actions",
-      header: "",
-      cell: (row) => (
-        <div className="flex justify-end">
-          <Link href={`/tanks/${row.id}`} className="btn btn-ghost btn-sm">
-            Details
-          </Link>
-        </div>
-      ),
-    },
+    actionsColumn<TankRow>((row) => (
+      <div className="flex justify-end">
+        <Link href={`/tanks/${row.id}`} className="btn btn-ghost btn-sm">
+          Details
+        </Link>
+      </div>
+    )),
   ];
 
   return (
