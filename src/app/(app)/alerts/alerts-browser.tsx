@@ -5,7 +5,7 @@ import Link from "next/link";
 import { timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select, Textarea } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { AlertSeverityBadge, AlertStatusBadge } from "@/components/domain/badges";
 import { ExportButton, LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -131,11 +131,11 @@ export function AlertsBrowser({
 
   const columns: Column<AlertRow>[] = useMemo(
     () => [
-      { key: "severity", header: "Severity", width: "8%", cell: (row) => <AlertSeverityBadge severity={row.severity} /> },
+      { key: "severity", header: "Severity", minWidth: 96, cell: (row) => <AlertSeverityBadge severity={row.severity} /> },
       {
         key: "title",
         header: "Alert",
-        width: "29%",
+        minWidth: 240,
         cell: (row) => (
           <div className="min-w-0 max-w-[26rem]">
             <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{row.title}</p>
@@ -151,12 +151,12 @@ export function AlertsBrowser({
       {
         key: "location",
         header: "Location",
-        width: "17%",
+        minWidth: 140,
         hideOnMobile: true,
         cell: (row) => (
           <div>
             {row.tankId ? (
-              <Link href={`/tanks/${row.tankId}`} className="block truncate text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
+              <Link href={`/tanks/${row.tankId}`} className="block truncate text-[0.8125rem] text-[var(--brand)] hover:underline">
                 {row.tankName ?? "View tank"}
               </Link>
             ) : null}
@@ -169,7 +169,7 @@ export function AlertsBrowser({
       {
         key: "createdAt",
         header: "Raised",
-        width: "13%",
+        minWidth: 116,
         hideOnMobile: true,
         cell: (row) => (
           <div>
@@ -178,31 +178,35 @@ export function AlertsBrowser({
           </div>
         ),
       },
-      { key: "status", header: "Status", width: "11%", cell: (row) => <AlertStatusBadge status={row.status} /> },
-      {
-        key: "actions",
-        header: "",
-        width: "22%",
-        cell: (row) => canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
-          <div className="flex items-center justify-end gap-1.5">
-            {canNote ? (
-              <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
-                Note
-              </Button>
-            ) : null}
-            {row.status === "active" && canAcknowledge ? (
-              <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
-                Acknowledge
-              </Button>
-            ) : null}
-            {row.status !== "resolved" && canResolve ? (
-              <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
-                Resolve
-              </Button>
-            ) : null}
-          </div>
-        ) : null,
-      },
+      { key: "status", header: "Status", minWidth: 132, cell: (row) => <AlertStatusBadge status={row.status} /> },
+      // Only offered when the user can act on an alert, so the heading never sits over an empty column.
+      ...(canNote || canAcknowledge || canResolve
+        ? [
+            actionsColumn<AlertRow>(
+              (row) =>
+                canNote || (row.status === "active" && canAcknowledge) || (row.status !== "resolved" && canResolve) ? (
+                  <div className="flex flex-wrap items-center justify-end gap-1.5">
+                    {canNote ? (
+                      <Button size="sm" variant="ghost" onClick={() => { setNoteTarget(row); setNoteBody(""); }}>
+                        Note
+                      </Button>
+                    ) : null}
+                    {row.status === "active" && canAcknowledge ? (
+                      <Button size="sm" variant="secondary" loading={busyId === row.id} onClick={() => act(row, "acknowledge")}>
+                        Acknowledge
+                      </Button>
+                    ) : null}
+                    {row.status !== "resolved" && canResolve ? (
+                      <Button size="sm" variant="primary" onClick={() => { setResolveTarget(row); setResolveNote(row.resolutionNote ?? ""); }}>
+                        Resolve
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null,
+              { minWidth: 232 },
+            ),
+          ]
+        : []),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [busyId, canAcknowledge, canNote, canResolve, canViewRules],

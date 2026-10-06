@@ -5,7 +5,7 @@ import Link from "next/link";
 import { timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { Badge, EmptyState, useToast } from "@/components/ui/feedback";
 import { ConfirmDialog, Modal } from "@/components/ui/overlay";
 import { ExportButton, LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -219,34 +219,37 @@ export function UsersBrowser({
             <span className="text-[0.75rem] text-[var(--ink-3)]">Never</span>
           ),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => canEdit || (canDelete && row.id !== currentUserId) ? (
-          <div className="flex items-center justify-end gap-1">
-            {canEdit && row.status === "invited" ? (
-              <Button
-                size="sm"
-                variant="ghost"
-                loading={invitationSendingId === row.id}
-                onClick={() => void resendInvitation(row)}
-              >
-                Resend invite
-              </Button>
-            ) : null}
-            {canEdit ? (
-              <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
-                Edit
-              </Button>
-            ) : null}
-            {canDelete && row.id !== currentUserId ? (
-              <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-                Suspend
-              </Button>
-            ) : null}
-          </div>
-        ) : null,
-      },
+      // Only offered when the user can act on a team member, so the heading never sits over an empty column.
+      ...(canEdit || canDelete
+        ? [
+            actionsColumn<UserRow>((row) =>
+              canEdit || (canDelete && row.id !== currentUserId) ? (
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {canEdit && row.status === "invited" ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={invitationSendingId === row.id}
+                      onClick={() => void resendInvitation(row)}
+                    >
+                      Resend invite
+                    </Button>
+                  ) : null}
+                  {canEdit ? (
+                    <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
+                      Edit
+                    </Button>
+                  ) : null}
+                  {canDelete && row.id !== currentUserId ? (
+                    <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
+                      Suspend
+                    </Button>
+                  ) : null}
+                </div>
+              ) : null,
+            ),
+          ]
+        : []),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [canDelete, canEdit, currentUserId],

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { formatNumber, formatPercent } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { StationStatusBadge } from "@/components/domain/badges";
 import { ExportButton, LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -97,7 +97,7 @@ export function StationsBrowser({
       {
         key: "name",
         header: "Station",
-        width: "23%",
+        minWidth: 184,
         cell: (row) => (
           <div className="min-w-0">
             <Link href={`/stations/${row.id}`} className="block truncate text-[0.8125rem] font-medium text-[var(--ink)] hover:underline">
@@ -109,7 +109,7 @@ export function StationsBrowser({
           </div>
         ),
       },
-      { key: "status", header: "Status", width: "9%", cell: (row) => <StationStatusBadge status={row.status} /> },
+      { key: "status", header: "Status", minWidth: 96, cell: (row) => <StationStatusBadge status={row.status} /> },
     ];
 
     if (canViewTanks) {
@@ -117,7 +117,7 @@ export function StationsBrowser({
         {
           key: "tanks",
           header: "Tanks",
-          width: "7%",
+          minWidth: 68,
           numeric: true,
           hideOnMobile: true,
           cell: (row) => row.tankCount ?? "-",
@@ -125,7 +125,7 @@ export function StationsBrowser({
         {
           key: "fuel",
           header: "Fuel on hand",
-          width: "14%",
+          minWidth: 116,
           numeric: true,
           cell: (row) => row.totalFuel == null || row.capacity == null ? "-" : (
             <div>
@@ -144,7 +144,7 @@ export function StationsBrowser({
         {
           key: "consumption",
           header: "Outflow today",
-          width: "11%",
+          minWidth: 92,
           numeric: true,
           hideOnMobile: true,
           cell: (row) => row.todayConsumption == null ? "-" : <span className="text-num">{formatNumber(row.todayConsumption)} L</span>,
@@ -152,7 +152,7 @@ export function StationsBrowser({
         {
           key: "refills",
           header: "Refills today",
-          width: "11%",
+          minWidth: 84,
           numeric: true,
           hideOnMobile: true,
           cell: (row) => row.todayRefills == null ? "-" : <span className="text-num">{formatNumber(row.todayRefills)} L</span>,
@@ -164,7 +164,7 @@ export function StationsBrowser({
       result.push({
         key: "alerts",
         header: "Alerts",
-        width: "8%",
+        minWidth: 92,
         numeric: true,
         cell: (row) => row.activeAlerts != null && row.activeAlerts > 0 ? (
           <span className="badge badge-crit">{row.activeAlerts} active</span>
@@ -178,7 +178,7 @@ export function StationsBrowser({
       result.push({
         key: "devices",
         header: "Devices",
-        width: "7%",
+        minWidth: 80,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => row.totalDevices == null || row.offlineDevices == null ? "-" : (
@@ -189,8 +189,26 @@ export function StationsBrowser({
       });
     }
 
+    result.push(
+      actionsColumn<StationRow>(
+        (row) => (
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <Link href={`/stations/${row.id}`} className="btn btn-ghost btn-sm">
+              View
+            </Link>
+            {canArchive ? (
+              <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
+                {row.isArchived ? "Restore" : "Archive"}
+              </Button>
+            ) : null}
+          </div>
+        ),
+        { minWidth: 116 },
+      ),
+    );
+
     return result;
-  }, [canViewAlerts, canViewDevices, canViewMovements, canViewTanks]);
+  }, [canArchive, canViewAlerts, canViewDevices, canViewMovements, canViewTanks]);
 
   return (
     <div className="space-y-4">
@@ -298,18 +316,6 @@ export function StationsBrowser({
               Add station
             </Link>
           ) : undefined}
-          rowActions={(row) => (
-            <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-              <Link href={`/stations/${row.id}`} className="btn btn-ghost btn-sm">
-                View
-              </Link>
-              {canArchive ? (
-                <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
-                  {row.isArchived ? "Restore" : "Archive"}
-                </Button>
-              ) : null}
-            </div>
-          )}
         />
       )}
 

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { DeviceStatusBadge } from "@/components/domain/badges";
 import { ExportButton, LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -132,6 +132,7 @@ export function DevicesBrowser({
       {
         key: "serialNumber",
         header: "Device",
+        minWidth: 168,
         cell: (row) => (
           <div className="min-w-0">
             <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{row.serialNumber}</p>
@@ -146,6 +147,7 @@ export function DevicesBrowser({
       {
         key: "type",
         header: "Type",
+        minWidth: 112,
         cell: (row) => (
           <span className="badge badge-neutral">{row.type === "fuel_probe" ? "Fuel probe" : "GPS tracker"}</span>
         ),
@@ -153,17 +155,18 @@ export function DevicesBrowser({
       {
         key: "assignment",
         header: "Assigned to",
+        minWidth: 128,
         cell: (row) =>
           row.type === "fuel_probe" ? (
             row.tankName ? (
-              <Link href={`/tanks/${row.tankId}`} className="text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
+              <Link href={`/tanks/${row.tankId}`} className="text-[0.8125rem] text-[var(--brand)] hover:underline">
                 {row.tankName}
               </Link>
             ) : (
               <span className="text-[0.75rem] text-[var(--ink-3)]">Not assigned</span>
             )
           ) : row.vehicleName ? (
-            <Link href="/vehicles" className="text-[0.8125rem] text-[var(--brand-ink)] hover:underline">
+            <Link href="/vehicles" className="text-[0.8125rem] text-[var(--brand)] hover:underline">
               {row.vehicleName}
             </Link>
           ) : (
@@ -173,6 +176,7 @@ export function DevicesBrowser({
       {
         key: "status",
         header: "Status",
+        minWidth: 96,
         cell: (row) => row.isActive
           ? <DeviceStatusBadge status={row.status} />
           : <span className="badge badge-neutral">Retired</span>,
@@ -180,6 +184,7 @@ export function DevicesBrowser({
       {
         key: "lastSeen",
         header: "Last seen",
+        minWidth: 100,
         hideOnMobile: true,
         cell: (row) =>
           row.lastSeenAt ? (
@@ -191,6 +196,7 @@ export function DevicesBrowser({
       {
         key: "signal",
         header: "Signal",
+        minWidth: 76,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.signalStrength == null ? "-" : `${row.signalStrength}`),
@@ -198,33 +204,38 @@ export function DevicesBrowser({
       {
         key: "battery",
         header: "Battery",
+        minWidth: 84,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.batteryPct == null ? "-" : `${row.batteryPct}%`),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => canEdit || canRetire ? (
-          <div className="flex items-center justify-end gap-1">
-            {canEdit ? (
-              <Button size="sm" variant="ghost" onClick={() => setRotateId(row.id)}>
-                Rotate key
-              </Button>
-            ) : null}
-            {canRetire && row.isActive ? (
-              <Button size="sm" variant="ghost" onClick={() => setRetireId(row.id)}>
-                Retire
-              </Button>
-            ) : null}
-            {canEdit && !row.isActive ? (
-              <Button size="sm" variant="ghost" onClick={() => restore(row)} loading={busy}>
-                Restore
-              </Button>
-            ) : null}
-          </div>
-        ) : null,
-      },
+      // Only offered when the user can act on a device, so the heading never sits over an empty column.
+      ...(canEdit || canRetire
+        ? [
+            actionsColumn<DeviceRow>(
+              (row) => (
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {canEdit ? (
+                    <Button size="sm" variant="ghost" onClick={() => setRotateId(row.id)}>
+                      Rotate key
+                    </Button>
+                  ) : null}
+                  {canRetire && row.isActive ? (
+                    <Button size="sm" variant="ghost" onClick={() => setRetireId(row.id)}>
+                      Retire
+                    </Button>
+                  ) : null}
+                  {canEdit && !row.isActive ? (
+                    <Button size="sm" variant="ghost" onClick={() => restore(row)} loading={busy}>
+                      Restore
+                    </Button>
+                  ) : null}
+                </div>
+              ),
+              { minWidth: 156 },
+            ),
+          ]
+        : []),
     ],
     [busy, canEdit, canRetire, restore],
   );

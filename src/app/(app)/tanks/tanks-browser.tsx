@@ -5,7 +5,7 @@ import Link from "next/link";
 import { formatNumber, formatPercent, timeAgo } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { TankStatusBadge } from "@/components/domain/badges";
 import { TankVisual } from "@/components/charts/tank-visual";
@@ -100,6 +100,7 @@ export function TanksBrowser({
       {
         key: "name",
         header: "Tank",
+        minWidth: 136,
         cell: (row) => (
           <div className="min-w-0">
             <Link href={`/tanks/${row.id}`} className="block truncate text-[0.8125rem] font-medium text-[var(--ink)] hover:underline">
@@ -114,6 +115,7 @@ export function TanksBrowser({
       {
         key: "level",
         header: "Measured volume",
+        minWidth: 204,
         cell: (row) => (
           <div className="flex items-center gap-3">
             <TankVisual
@@ -140,10 +142,11 @@ export function TanksBrowser({
           </div>
         ),
       },
-      { key: "status", header: "Status", cell: (row) => <TankStatusBadge status={row.status} /> },
+      { key: "status", header: "Status", minWidth: 104, cell: (row) => <TankStatusBadge status={row.status} /> },
       {
         key: "lastReading",
         header: "Last reading",
+        minWidth: 96,
         hideOnMobile: true,
         cell: (row) =>
           row.lastReadingAt ? (
@@ -155,6 +158,7 @@ export function TanksBrowser({
       {
         key: "temp",
         header: "Temp",
+        minWidth: 68,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.currentTempC == null ? "-" : `${row.currentTempC.toFixed(1)} °C`),
@@ -162,6 +166,7 @@ export function TanksBrowser({
       {
         key: "water",
         header: "Water",
+        minWidth: 72,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.waterLevelMm == null ? "-" : `${row.waterLevelMm.toFixed(1)} mm`),
@@ -169,6 +174,7 @@ export function TanksBrowser({
       {
         key: "thresholds",
         header: "Thresholds",
+        minWidth: 124,
         hideOnMobile: true,
         cell: (row) => (
           <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
@@ -176,11 +182,9 @@ export function TanksBrowser({
           </span>
         ),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => (
-          <div className="flex items-center justify-end gap-1">
+      actionsColumn<TankRow>(
+        (row) => (
+          <div className="flex flex-wrap items-center justify-end gap-1">
             <Link href={`/tanks/${row.id}`} className="btn btn-ghost btn-sm">
               Details
             </Link>
@@ -191,7 +195,8 @@ export function TanksBrowser({
             ) : null}
           </div>
         ),
-      },
+        { minWidth: 120 },
+      ),
     ],
     [canArchive],
   );

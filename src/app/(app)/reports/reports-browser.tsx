@@ -5,7 +5,7 @@ import { timeAgo } from "@/lib/utils";
 import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { Badge } from "@/components/ui/feedback";
 import { LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -144,17 +144,18 @@ export function ReportsBrowser({
             <span className="text-[0.75rem] text-[var(--ink-3)]">No file</span>
           ),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => canCreate ? (
-          <div className="flex items-center justify-end gap-1">
-            <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-              {row.status === "archived" ? "Restore" : "Archive"}
-            </Button>
-          </div>
-        ) : null,
-      },
+      // Only offered to users who can manage reports, so the heading never sits over an empty column.
+      ...(canCreate
+        ? [
+            actionsColumn<ReportRow>((row) => (
+              <div className="flex items-center justify-end gap-1">
+                <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
+                  {row.status === "archived" ? "Restore" : "Archive"}
+                </Button>
+              </div>
+            )),
+          ]
+        : []),
     ],
     [canCreate, canExport],
   );

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { formatNumber } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/form";
-import { DataTable, type Column } from "@/components/ui/data-table";
+import { DataTable, actionsColumn, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
 import { VehicleStatusBadge } from "@/components/domain/badges";
 import { ExportButton, LoadError, useResourceQuery } from "@/components/domain/resource-query";
@@ -92,6 +92,7 @@ export function VehiclesBrowser({
       {
         key: "name",
         header: "Vehicle",
+        minWidth: 170,
         cell: (row) => (
           <div className="min-w-0">
             <p className="truncate text-[0.8125rem] font-medium text-[var(--ink)]">{row.name}</p>
@@ -104,10 +105,11 @@ export function VehiclesBrowser({
           </div>
         ),
       },
-      { key: "status", header: "Status", cell: (row) => <VehicleStatusBadge status={row.status} /> },
+      { key: "status", header: "Status", minWidth: 104, cell: (row) => <VehicleStatusBadge status={row.status} /> },
       {
         key: "capacity",
         header: "Tank capacity",
+        minWidth: 112,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.tankCapacity == null ? "-" : `${formatNumber(Math.round(row.tankCapacity))} L`),
@@ -115,6 +117,7 @@ export function VehiclesBrowser({
       {
         key: "odometer",
         header: "Odometer",
+        minWidth: 104,
         numeric: true,
         hideOnMobile: true,
         cell: (row) => (row.odometerKm == null ? "-" : `${formatNumber(Math.round(row.odometerKm))} km`),
@@ -122,6 +125,7 @@ export function VehiclesBrowser({
       {
         key: "tracker",
         header: "GPS tracker",
+        minWidth: 120,
         cell: (row) =>
           row.tracker ? (
             <div>
@@ -135,6 +139,7 @@ export function VehiclesBrowser({
       {
         key: "driver",
         header: "Driver",
+        minWidth: 140,
         hideOnMobile: true,
         cell: (row) =>
           row.driverName ? (
@@ -146,34 +151,38 @@ export function VehiclesBrowser({
             <span className="text-[0.75rem] text-[var(--ink-3)]">Unassigned</span>
           ),
       },
-      {
-        key: "actions",
-        header: "",
-        cell: (row) => (
-          <div className="flex items-center justify-end gap-1">
-            {canEdit ? (
-              <Link href={`/vehicles/${row.id}/edit`} className="btn btn-ghost btn-sm">
-                Edit
-              </Link>
-            ) : null}
-            {canViewDevices ? (
-              <>
-                <Link href={`/vehicles/${row.id}`} className="btn btn-ghost btn-sm">
-                  Position history
-                </Link>
-                <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
-                  Tracker
-                </Link>
-              </>
-            ) : null}
-            {canArchive ? (
-              <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
-                {row.isArchived ? "Restore" : "Archive"}
-              </Button>
-            ) : null}
-          </div>
-        ),
-      },
+      // Only offered when the user can act on a vehicle, so the heading never sits over an empty column.
+      ...(canEdit || canViewDevices || canArchive
+        ? [
+            actionsColumn<VehicleRow>(
+              (row) => (
+                <div className="flex flex-wrap items-center justify-end gap-1">
+                  {canEdit ? (
+                    <Link href={`/vehicles/${row.id}/edit`} className="btn btn-ghost btn-sm">
+                      Edit
+                    </Link>
+                  ) : null}
+                  {canViewDevices ? (
+                    <>
+                      <Link href={`/vehicles/${row.id}`} className="btn btn-ghost btn-sm">
+                        Position history
+                      </Link>
+                      <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
+                        Tracker
+                      </Link>
+                    </>
+                  ) : null}
+                  {canArchive ? (
+                    <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
+                      {row.isArchived ? "Restore" : "Archive"}
+                    </Button>
+                  ) : null}
+                </div>
+              ),
+              { minWidth: 216 },
+            ),
+          ]
+        : []),
     ],
     [canArchive, canEdit, canViewDevices],
   );
