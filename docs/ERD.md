@@ -256,7 +256,10 @@ delete path — the table is the compliance record.
    reconcileTank()            opening + refills − consumption vs measured
 ```
 
-Vercel Cron runs the bounded device-health sweep rather than relying on a process-local background timer:
+The bounded device-health sweep runs from Vercel Cron and from request traffic rather than from a
+process-local background timer. Vercel Hobby fires Cron jobs at most once a day, so telemetry
+ingest and authenticated API calls also start the sweep under a durable lease, which is what keeps
+`deviceOfflineMinutes` meaningful between daily runs:
 
 - **`sweepDeviceHealth`** — a device silent past `deviceOfflineMinutes` is marked offline, its
   tank is marked offline, an alert is raised, and the last valid reading is preserved. When

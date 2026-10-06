@@ -22,6 +22,11 @@ const ENV_KEYS = [
   { key: "RATE_LIMIT_MAX", label: "Rate limit", hint: "Requests per window per client" },
   { key: "SMTP_HOST", label: "SMTP host", hint: "Required before password reset emails can be sent" },
   { key: "CRON_SECRET", label: "Cron secret", hint: "Authorizes the Vercel maintenance sweep" },
+  {
+    key: "MAINTENANCE_SWEEP_INTERVAL_SECONDS",
+    label: "Sweep interval",
+    hint: "Seconds between maintenance sweeps started by request traffic (default 300)",
+  },
 ];
 
 export default async function SystemSettingsPage() {

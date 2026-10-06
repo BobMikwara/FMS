@@ -3,6 +3,7 @@ import { hashDeviceKey, verifyDeviceKey } from "@/server/auth/session";
 import { getProvider } from "@/server/integrations/providers";
 import { getDeviceByApiKeyHash } from "@/server/db/repo/devices";
 import { ingestVehiclePosition } from "@/server/services/vehicle-telemetry";
+import { scheduleMaintenanceSweep } from "@/server/services/maintenance-sweep";
 import { ApiError, conflict, forbidden, jsonError, jsonOk, notFound, unauthorized, unprocessable } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
@@ -72,6 +73,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ pro
     if ((providerAdapter.kind === "gps") !== (device.type === "gps_tracker")) {
       return jsonError(conflict("The device type does not match this provider's telemetry class."));
     }
+
+    // Telemetry is the strongest signal that a fleet is live, so it also keeps the
+    // device-health sweep warm between the daily Cron runs. Scheduled before
+    // parsing so both the GPS and fuel-probe success paths are covered; it runs
+    // after this response, once the reading has committed.
+    scheduleMaintenanceSweep("device-telemetry");
 
     let payload: Record<string, unknown>;
     try {

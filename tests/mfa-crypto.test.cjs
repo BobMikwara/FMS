@@ -27,7 +27,16 @@ test("authenticator credentials are AES-GCM encrypted and reject tampering", () 
   const encrypted = encryptMfaCredential(credential);
   assert.notEqual(encrypted, JSON.stringify(credential));
   assert.deepEqual(decryptMfaCredential(encrypted), credential);
-  assert.throws(() => decryptMfaCredential(`${encrypted.slice(0, -1)}x`));
+
+  // Tamper with the first character of the ciphertext segment. Every bit of a
+  // base64url group's leading character lands in a decoded byte, so this always
+  // changes the plaintext. Swapping the *final* character instead is flaky: the
+  // last group's low bits are discarded, so ~1 in 16 replacements decode to the
+  // original bytes and no exception is raised.
+  const [version, iv, tag, value] = encrypted.split(".");
+  const tampered = [version, iv, tag, (value[0] === "A" ? "B" : "A") + value.slice(1)].join(".");
+  assert.notEqual(tampered, encrypted);
+  assert.throws(() => decryptMfaCredential(tampered));
 });
 
 test("recovery codes are unique, printable once, and hashed consistently", () => {

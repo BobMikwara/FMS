@@ -62,8 +62,9 @@ export default async function ScheduledReportsPage() {
 
       {mailConfigured ? (
         <Notice tone="ok" title="Scheduled execution is active">
-          Due schedules are checked every five minutes. Report generation and each recipient delivery have separate status
-          records; transient email failures are retried automatically.
+          Due schedules are picked up by the maintenance sweep, which runs at least once a day and again whenever the
+          platform is in use. Report generation and each recipient delivery have separate status records; transient email
+          failures are retried automatically.
         </Notice>
       ) : (
         <Notice tone="info" title="Report generation is active; email is not configured">
