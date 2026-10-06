@@ -1,3 +1,4 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { addAlertNote, getAlert, listAlertNotes } from "@/server/db/repo/alerts";
 import { audit, jsonCreated, jsonError, jsonOk, maxLen, notFound, parseJsonBody, required, withPermission } from "@/server/api/route";
 
@@ -10,7 +11,7 @@ export const GET = withPermission("alerts.view", async (request, ctx) => {
     if (
       !alert ||
       alert.organizationId !== ctx.user.organizationId ||
-      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(alert.stationId))
+      !userCanAccessStation(ctx.user, alert.stationId)
     ) {
       return jsonError(notFound("Alert not found."), request);
     }
@@ -20,14 +21,14 @@ export const GET = withPermission("alerts.view", async (request, ctx) => {
   }
 });
 
-export const POST = withPermission("alerts.acknowledge", async (request, ctx) => {
+export const POST = withPermission("alerts.notes", async (request, ctx) => {
   try {
     const alertId = ctx.params?.alertId ?? "";
     const alert = await getAlert(alertId);
     if (
       !alert ||
       alert.organizationId !== ctx.user.organizationId ||
-      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(alert.stationId))
+      !userCanAccessStation(ctx.user, alert.stationId)
     ) {
       return jsonError(notFound("Alert not found."), request);
     }

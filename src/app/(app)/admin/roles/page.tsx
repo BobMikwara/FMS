@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
@@ -14,7 +15,8 @@ export default async function RolesPage() {
   if (!user) redirect("/login");
 
   const roles = (await listRoles());
-  const users = (await listUsers(user.organizationId));
+  const users = (await listUsers(user.organizationId, stationScopeForUser(user)))
+    .filter((entry) => userCanAccessStationScopedUser(user, entry.stationIds, entry.roleKey));
 
   const grouped = new Map<string, string[]>();
   for (const role of roles) {

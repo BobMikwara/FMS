@@ -1,8 +1,10 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getTank, getStation } from "@/server/db/repo/stations";
 import { buildTankDetail } from "@/server/services/analytics";
-import { getCurrentUser } from "@/server/auth/session";
+import { publicDevice } from "@/server/services/device-response";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { PageHeader } from "@/components/ui/layout";
 import { Badge, EmptyState } from "@/components/ui/feedback";
 import { TankVisual } from "@/components/charts/tank-visual";
@@ -18,22 +20,29 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
     !tank ||
     !user ||
     tank.organizationId !== user.organizationId ||
-    (user.stationIds.length > 0 && !user.stationIds.includes(tank.stationId))
+    (!userCanAccessStation(user, tank.stationId))
   ) notFound();
 
   const station = (await getStation(tank.stationId));
   const data = (await buildTankDetail(tankId));
+  const canViewAlerts = hasPermission(user, "alerts.view");
+  const canViewStations = hasPermission(user, "stations.view");
+  const canViewReadings = hasPermission(user, "readings.view");
+  const canViewMovements = hasPermission(user, "movements.view");
+  const canViewDevices = hasPermission(user, "devices.view");
 
   return (
     <div className="space-y-5">
       <PageHeader
         title={tank.name}
-        description={`${tank.code} · ${station?.name ?? "Unknown station"} · ${
+        description={`${tank.code} · ${canViewStations ? station?.name ?? "Unknown station" : "Tank details"} · ${
           tank.tankType === "underground" ? "Underground" : "Above ground"
         } tank`}
         breadcrumbs={[
-          { label: "Stations", href: "/stations" },
-          { label: station?.name ?? "Station", href: `/stations/${tank.stationId}` },
+          ...(canViewStations ? [{ label: "Stations", href: "/stations" }] : []),
+          ...(station && canViewStations
+            ? [{ label: station.name, href: `/stations/${tank.stationId}` }]
+            : []),
           { label: tank.name },
         ]}
         actions={
@@ -42,9 +51,11 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
             <Badge tone="info">
               Low {tank.lowThresholdPct}% · Critical {tank.criticalThresholdPct}% · Overfill {tank.overfillThresholdPct}%
             </Badge>
-            <Link href={`/stations/${tank.stationId}`} className="btn btn-secondary btn-sm">
-              Station overview
-            </Link>
+            {canViewStations ? (
+              <Link href={`/stations/${tank.stationId}`} className="btn btn-secondary btn-sm">
+                Station overview
+              </Link>
+            ) : null}
           </div>
         }
       />
@@ -54,38 +65,52 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
           icon="tank"
           title="No readings available yet"
           description={`${tank.name} has not reported any probe readings, so no volume, temperature or water data can be shown. This is expected for a newly installed tank - readings will appear as soon as the device connects.`}
-          action={
+          action={hasPermission(user, "devices.view") ? (
             <Link href="/devices" className="btn btn-primary">
               Check device status
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <TankDetailClient
           // `node:sqlite` returns rows with a null prototype, which cannot cross
           // the server/client boundary - round-trip through JSON first.
-          {...(JSON.parse(JSON.stringify({ tank: data.tank, station: data.station, fuelType: data.fuelType, device: data.device })) as {
+          {...(JSON.parse(JSON.stringify({
+            tank: data.tank,
+            station: canViewStations && data.station ? { name: data.station.name } : null,
+            fuelType: data.fuelType,
+            device: canViewDevices && data.device ? publicDevice(data.device) : null,
+          })) as {
             tank: typeof data.tank;
-            station: typeof data.station;
+            station: Pick<NonNullable<typeof data.station>, "name"> | null;
             fuelType: typeof data.fuelType;
-            device: typeof data.device;
+            device: Omit<NonNullable<typeof data.device>, "apiKeyHash"> | null;
           })}
           detail={JSON.parse(JSON.stringify({
             fillPercent: data.fillPercent,
             remainingCapacity: data.remainingCapacity,
-            status: data.status,
             dataState: data.dataState,
-            lastUpdateAgeMinutes: data.lastUpdateAgeMinutes,
-            todayConsumption: data.todayConsumption,
-            todayRefills: data.todayRefills,
-            coverage: data.coverage,
-            reconciliation: data.reconciliation,
-            history: data.history,
-            events: data.events.slice(0, 20),
-            alerts: data.alerts.slice(0, 10),
-            readings: data.readings.slice(0, 20),
-            latestReading: data.latestReading,
+            timeZone: station?.timezone ?? data.station?.timezone ?? "Africa/Dar_es_Salaam",
+            todayConsumption: canViewMovements ? data.todayConsumption : null,
+            todayRefills: canViewMovements ? data.todayRefills : null,
+            coverage: canViewMovements ? data.coverage : null,
+            reconciliation: canViewReadings && canViewMovements ? data.reconciliation : null,
+            history: canViewReadings ? data.history : [],
+            events: canViewMovements ? data.events.slice(0, 20) : [],
+            alerts: canViewAlerts ? data.alerts.slice(0, 10) : [],
+            readings: canViewReadings ? data.readings.slice(0, 20) : [],
+            latestReading: data.tank.lastReadingAt
+              ? { ts: data.tank.lastReadingAt, volumeLiters: data.tank.currentVolume }
+              : null,
           }))}
+          canViewAlerts={canViewAlerts}
+          canViewReadings={canViewReadings}
+          canViewMovements={canViewMovements}
+          canViewDevices={canViewDevices}
+          canEditTank={hasPermission(user, "tanks.edit")}
+          canAcknowledge={hasPermission(user, "alerts.acknowledge")}
+          canResolve={hasPermission(user, "alerts.resolve")}
+          canNote={hasPermission(user, "alerts.notes")}
         />
       )}
 
@@ -96,8 +121,8 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
         </p>
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
-            { label: "Full", range: "85 - 100%", color: "#16a34a" },
-            { label: "Normal", range: `${tank.lowThresholdPct} - <85%`, color: "#2563eb" },
+            { label: "Full", range: `≥ ${tank.overfillThresholdPct}%`, color: "#16a34a" },
+            { label: "Normal", range: `${tank.lowThresholdPct} - <${tank.overfillThresholdPct}%`, color: "#2563eb" },
             { label: "Low", range: `${tank.criticalThresholdPct} - <${tank.lowThresholdPct}%`, color: "#a16207" },
             { label: "Critical", range: `< ${tank.criticalThresholdPct}%`, color: "#dc2626" },
           ].map((row) => (
@@ -138,6 +163,7 @@ export default async function TankDetailPage({ params }: { params: Promise<{ tan
             status={data?.status ?? "normal"}
             lowThresholdPct={tank.lowThresholdPct}
             criticalThresholdPct={tank.criticalThresholdPct}
+            overfillThresholdPct={tank.overfillThresholdPct}
             dataState={data?.dataState ?? "offline"}
             size="lg"
             showHeader={false}

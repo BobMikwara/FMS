@@ -13,12 +13,13 @@ import {
   required,
   str,
   uniqueViolation,
+  withAnyPermission,
   withPermission,
 } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
 
-export const GET = withPermission("tanks.view", async (request, ctx) => {
+export const GET = withAnyPermission(["tanks.view", "fuel_types.manage"], async (request, ctx) => {
   try {
     const rows = (await listFuelTypes(ctx.user.organizationId));
     return jsonOk({ rows, total: rows.length });

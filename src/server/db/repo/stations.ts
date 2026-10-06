@@ -1,4 +1,4 @@
-import { execute, id, intToBool, query, queryOne, toIso } from "../client";
+import { execute, id, intToBool, isPostgres, query, queryOne, toIso } from "../client";
 import { parseJson, snake } from "./core";
 import type { FuelType, Station, Tank } from "../../domain/types";
 
@@ -17,16 +17,21 @@ export interface StationFilter {
   page?: number;
   pageSize?: number;
   includeArchived?: boolean;
+  archivedOnly?: boolean;
   stationIds?: string[];
 }
 
 export async function listStations(filter: StationFilter): Promise<{ rows: Station[]; total: number }> {
   const where: string[] = ["s.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (!filter.includeArchived) where.push("s.is_archived = 0");
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`s.id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.archivedOnly) where.push("s.is_archived = 1");
+  else if (!filter.includeArchived) where.push("s.is_archived = 0");
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`s.id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.search) {
     where.push("(s.name LIKE ? OR s.code LIKE ? OR s.city LIKE ? OR s.region LIKE ?)");
@@ -145,8 +150,8 @@ export async function updateStation(stationId: string, patch: Record<string, unk
   return (await getStation(stationId));
 }
 
-export async function deleteStation(stationId: string): Promise<void> {
-  (await execute("DELETE FROM stations WHERE id = ?", [stationId]));
+export async function archiveStation(stationId: string): Promise<Station | null> {
+  return (await updateStation(stationId, { isArchived: true }));
 }
 
 function mapStation(row: Record<string, unknown>): Station {
@@ -230,8 +235,8 @@ export async function updateFuelType(fuelTypeId: string, patch: Record<string, u
   return (await getFuelType(fuelTypeId));
 }
 
-export async function deleteFuelType(fuelTypeId: string): Promise<void> {
-  (await execute("DELETE FROM fuel_types WHERE id = ?", [fuelTypeId]));
+export async function deactivateFuelType(fuelTypeId: string): Promise<FuelType | null> {
+  return (await updateFuelType(fuelTypeId, { isActive: false }));
 }
 
 function mapFuelType(row: Record<string, unknown>): FuelType {
@@ -264,20 +269,28 @@ export interface TankFilter {
   page?: number;
   pageSize?: number;
   includeArchived?: boolean;
+  archivedOnly?: boolean;
   stationIds?: string[];
 }
 
 export async function listTanks(filter: TankFilter): Promise<{ rows: Tank[]; total: number }> {
   const where: string[] = ["t.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (!filter.includeArchived) where.push("t.is_archived = 0");
+  if (filter.archivedOnly) where.push("t.is_archived = 1");
+  else if (!filter.includeArchived) {
+    where.push("t.is_archived = 0");
+    where.push("s.is_archived = 0");
+  }
   if (filter.stationId) {
     where.push("t.station_id = ?");
     params.push(filter.stationId);
   }
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`t.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`t.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.fuelTypeId) {
     where.push("t.fuel_type_id = ?");
@@ -320,15 +333,24 @@ export async function listTanks(filter: TankFilter): Promise<{ rows: Tank[]; tot
 }
 
 export async function listAllTanks(orgId: string, includeArchived = false): Promise<Tank[]> {
-  const rows = (await query<Record<string, unknown>>(
-    `SELECT * FROM tanks WHERE organization_id = ? ${includeArchived ? "" : "AND is_archived = 0"} ORDER BY name`,
+  const rows = await query<Record<string, unknown>>(
+    `SELECT t.* FROM tanks t JOIN stations s ON s.id = t.station_id
+     WHERE t.organization_id = ? ${includeArchived ? "" : "AND t.is_archived = 0 AND s.is_archived = 0"}
+     ORDER BY t.name`,
     [orgId],
-  ));
+  );
   return rows.map(mapTank);
 }
 
 export async function getTank(tankId: string): Promise<Tank | null> {
   const row = (await queryOne<Record<string, unknown>>("SELECT * FROM tanks WHERE id = ?", [tankId]));
+  return row ? mapTank(row) : null;
+}
+
+/** Lock the tank row while an ingestion transaction updates its reading state. */
+export async function lockTankForUpdate(tankId: string): Promise<Tank | null> {
+  const lockClause = isPostgres() ? " FOR UPDATE" : "";
+  const row = await queryOne<Record<string, unknown>>(`SELECT * FROM tanks WHERE id = ?${lockClause}`, [tankId]);
   return row ? mapTank(row) : null;
 }
 
@@ -391,8 +413,8 @@ export async function updateTank(tankId: string, patch: Record<string, unknown>)
   return (await getTank(tankId));
 }
 
-export async function deleteTank(tankId: string): Promise<void> {
-  (await execute("DELETE FROM tanks WHERE id = ?", [tankId]));
+export async function archiveTank(tankId: string): Promise<Tank | null> {
+  return (await updateTank(tankId, { isArchived: true }));
 }
 
 export async function countTanks(orgId: string, stationId?: string): Promise<number> {

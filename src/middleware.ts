@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { jwtVerify } from "jose";
 
 const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password"];
-const PUBLIC_API = ["/api/auth/login", "/api/auth/forgot-password", "/api/auth/reset-password", "/api/webhooks/", "/api/cron/", "/api/health"];
+const PUBLIC_API = ["/api/auth/login", "/api/auth/mfa/login", "/api/auth/forgot-password", "/api/auth/reset-password", "/api/webhooks/", "/api/cron/", "/api/health"];
 const COOKIE = "smartfuel_session";
 
 function getSecret(): Uint8Array {
@@ -46,7 +46,9 @@ export async function middleware(request: Request) {
     return response;
   }
 
-  return NextResponse.next();
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-smartfuel-path", pathname);
+  return NextResponse.next({ request: { headers: requestHeaders } });
 }
 
 async function verify(token: string): Promise<boolean> {

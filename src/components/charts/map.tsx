@@ -35,6 +35,8 @@ export interface MapVehicle {
   longitude: number | null;
   status: string;
   lastSeenAt: string | null;
+  positionSource: "tracker" | "home_station" | "none";
+  freshness: "live" | "delayed" | "stale" | "unknown";
 }
 
 interface Projected {
@@ -127,7 +129,10 @@ export function NetworkMap({
   const vehiclesProjected = useMemo(() => {
     const withPosition = vehicles.filter(
       (vehicle): vehicle is MapVehicle & { latitude: number; longitude: number } =>
-        vehicle.latitude != null && vehicle.longitude != null,
+        vehicle.latitude != null &&
+        vehicle.longitude != null &&
+        (vehicle.positionSource === "home_station" ||
+          (vehicle.positionSource === "tracker" && vehicle.freshness === "live")),
     );
     if (withPosition.length === 0) return [];
     const { project: toPoint } = project(
@@ -278,16 +283,20 @@ export function NetworkMap({
           );
         })}
 
-        {/* Vehicles, when a position is known. */}
+        {/* Only fresh tracker fixes are shown as vehicle positions; home stations are static references. */}
         {vehiclesProjected.map(({ vehicle, x, y }) => (
           <g key={vehicle.id} transform={`translate(${x} ${y})`} aria-hidden="true">
-            <path
-              d="M -4 -4 L 4 0 L -4 4 Z"
-              fill="var(--brand)"
-              stroke="var(--surface)"
-              strokeWidth="1.2"
-              transform={`rotate(${vehicle.status === "active" ? 0 : 180})`}
-            />
+            {vehicle.positionSource === "tracker" ? (
+              <path
+                d="M -4 -4 L 4 0 L -4 4 Z"
+                fill="var(--brand)"
+                stroke="var(--surface)"
+                strokeWidth="1.2"
+                transform={`rotate(${vehicle.status === "active" ? 0 : 180})`}
+              />
+            ) : (
+              <circle r="4" fill="var(--ink-3)" stroke="var(--surface)" strokeWidth="1.2" />
+            )}
           </g>
         ))}
       </svg>
@@ -300,10 +309,16 @@ export function NetworkMap({
             {STATUS_LABEL[status]}
           </span>
         ))}
-        {vehicles.length > 0 ? (
+        {vehicles.some((vehicle) => vehicle.positionSource === "tracker" && vehicle.freshness === "live") ? (
           <span className="flex items-center gap-1.5 text-[0.6875rem] text-[var(--ink-2)]">
             <span className="dot" style={{ background: "var(--brand)" }} />
-            Vehicle with position
+            Fresh tracker position
+          </span>
+        ) : null}
+        {vehicles.some((vehicle) => vehicle.positionSource === "home_station") ? (
+          <span className="flex items-center gap-1.5 text-[0.6875rem] text-[var(--ink-2)]">
+            <span className="dot" style={{ background: "var(--ink-3)" }} />
+            Home station (static)
           </span>
         ) : null}
       </div>

@@ -1,4 +1,5 @@
-import { execute, id, insertMany, intToBool, query, queryOne, toIso } from "../client";
+import { createHash } from "node:crypto";
+import { execute, id, insertMany, intToBool, query, queryOne, toIso, transaction } from "../client";
 import type {
   AuditLog,
   Integration,
@@ -119,12 +120,25 @@ function mapRole(row: Record<string, unknown>): Role {
 /* Users                                                                      */
 /* -------------------------------------------------------------------------- */
 
-export async function listUsers(orgId: string): Promise<User[]> {
+export async function listUsers(orgId: string, stationIds?: string[]): Promise<User[]> {
+  if (stationIds !== undefined && stationIds.length === 0) return [];
+  const stationPlaceholders = stationIds?.map(() => "?").join(", ");
+  const stationClause = stationIds === undefined
+    ? ""
+    : ` AND r.key NOT IN ('admin', 'super_admin', 'owner')
+        AND EXISTS (
+          SELECT 1 FROM user_stations matched
+          WHERE matched.user_id = u.id AND matched.station_id IN (${stationPlaceholders})
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM user_stations outside_scope
+          WHERE outside_scope.user_id = u.id AND outside_scope.station_id NOT IN (${stationPlaceholders})
+        )`;
   const rows = (await query<Record<string, unknown>>(
     `SELECT u.*, r.key AS role_key, r.name AS role_name, r.permissions AS role_permissions
      FROM users u JOIN roles r ON r.id = u.role_id
-     WHERE u.organization_id = ? ORDER BY u.created_at DESC`,
-    [orgId],
+     WHERE u.organization_id = ?${stationClause} ORDER BY u.created_at DESC`,
+    [orgId, ...(stationIds ?? []), ...(stationIds ?? [])],
   ));
   const stationMap = (await userStationMap(rows.map((r) => String(r.id))));
   return rows.map((row) => mapUser(row, stationMap));
@@ -225,12 +239,32 @@ export async function updateUser(
   if (patch.lockedUntil !== undefined) push("locked_until", patch.lockedUntil);
   if (fields.length === 0) return (await getUser(userId));
   values.push(userId);
-  (await execute(`UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
-  return (await getUser(userId));
+  return transaction(async () => {
+    const result = await execute(
+      `UPDATE users SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`,
+      values,
+    );
+    const revokeSessions = patch.passwordHash !== undefined || patch.mfaEnabled !== undefined || patch.status !== undefined;
+    if (result.changes > 0 && revokeSessions) {
+      await execute(
+        `INSERT INTO user_security_state (user_id, session_version, updated_at)
+         VALUES (?, 1, strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+         ON CONFLICT (user_id) DO UPDATE SET
+           session_version = user_security_state.session_version + 1,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')`,
+        [userId],
+      );
+      await execute("DELETE FROM user_mfa_login_challenges WHERE user_id = ?", [userId]);
+      if (patch.passwordHash !== undefined) {
+        await execute("DELETE FROM user_mfa_enrollments WHERE user_id = ?", [userId]);
+      }
+    }
+    return getUser(userId);
+  });
 }
 
-export async function deleteUser(userId: string): Promise<void> {
-  (await execute("DELETE FROM users WHERE id = ?", [userId]));
+export async function suspendUser(userId: string): Promise<User | null> {
+  return (await updateUser(userId, { status: "suspended" }));
 }
 
 export async function setUserStations(userId: string, stationIds: string[]): Promise<void> {
@@ -285,10 +319,15 @@ function mapUser(row: Record<string, unknown>, stationMap: Map<string, string[]>
 /* -------------------------------------------------------------------------- */
 
 export async function createResetToken(userId: string, tokenHash: string, expiresAt: string): Promise<void> {
-  (await execute(
+  const now = new Date().toISOString();
+  await execute(
+    "UPDATE password_reset_tokens SET used_at = ? WHERE user_id = ? AND used_at IS NULL",
+    [now, userId],
+  );
+  await execute(
     "INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, ?)",
     [id("prt"), userId, tokenHash, expiresAt],
-  ));
+  );
 }
 
 export async function consumeResetToken(tokenHash: string): Promise<string | null> {
@@ -350,6 +389,7 @@ export interface AuditFilter {
   orgId: string;
   userId?: string;
   userIds?: string[];
+  stationIds?: string[];
   entity?: string;
   action?: string;
   search?: string;
@@ -359,9 +399,78 @@ export interface AuditFilter {
   pageSize?: number;
 }
 
+function reportStationLikePattern(stationId: string): string {
+  const jsonValue = JSON.stringify(stationId).slice(1, -1);
+  const escapedValue = jsonValue.replace(/[\\%_]/g, "\\$&");
+  return `%"stationId":"${escapedValue}"%`;
+}
+
 export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditLog[]; total: number }> {
+  if (filter.stationIds !== undefined && filter.stationIds.length === 0) return { rows: [], total: 0 };
+
   const where: string[] = ["l.user_id IN (SELECT id FROM users WHERE organization_id = ?)"];
   const params: unknown[] = [filter.orgId];
+  const stationCte = filter.stationIds === undefined
+    ? ""
+    : `WITH station_scope AS (SELECT id FROM stations WHERE organization_id = ? AND id IN (${filter.stationIds.map(() => "?").join(", ")}))`;
+  const stationCteParams = filter.stationIds === undefined ? [] : [filter.orgId, ...filter.stationIds];
+  if (filter.stationIds !== undefined) {
+    const stationClause = `(
+      (l.entity = 'station' AND l.entity_id IN (SELECT id FROM station_scope))
+      OR (l.entity = 'tank' AND l.entity_id IN (SELECT id FROM tanks WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'device' AND l.entity_id IN (
+        SELECT d.id FROM devices d WHERE d.organization_id = ?
+          AND (d.station_id IS NULL OR d.station_id IN (SELECT id FROM station_scope))
+          AND (d.tank_id IS NULL OR d.tank_id IN (
+            SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (SELECT id FROM station_scope)
+          ))
+          AND (d.vehicle_id IS NULL OR d.vehicle_id IN (
+            SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (SELECT id FROM station_scope)
+          ))
+          AND (
+            d.station_id IN (SELECT id FROM station_scope)
+            OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = ? AND t.station_id IN (SELECT id FROM station_scope))
+            OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = ? AND v.station_id IN (SELECT id FROM station_scope))
+          )
+      ))
+      OR (l.entity = 'vehicle' AND l.entity_id IN (SELECT id FROM vehicles WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'alert' AND l.entity_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'alert_note' AND l.entity_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'scheduled_report' AND l.entity_id IN (SELECT id FROM scheduled_reports WHERE organization_id = ? AND station_id IN (SELECT id FROM station_scope)))
+      OR (l.entity = 'report' AND l.entity_id IN (
+        SELECT r.id FROM reports r WHERE r.organization_id = ? AND (${filter.stationIds.map(() => "r.filters LIKE ? ESCAPE '\\'").join(" OR ")})
+      ))
+      OR (l.entity = 'user' AND l.entity_id IN (
+        SELECT u.id FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE u.organization_id = ?
+          AND r.key NOT IN ('admin', 'super_admin', 'owner')
+          AND EXISTS (
+            SELECT 1 FROM user_stations us
+            WHERE us.user_id = u.id AND us.station_id IN (SELECT id FROM station_scope)
+          )
+          AND NOT EXISTS (
+            SELECT 1 FROM user_stations us_out
+            WHERE us_out.user_id = u.id AND us_out.station_id NOT IN (SELECT id FROM station_scope)
+          )
+      ))
+    )`;
+    where.push(stationClause);
+    params.push(
+      filter.orgId, // tank
+      filter.orgId, // device
+      filter.orgId, // device tank constraint
+      filter.orgId, // device vehicle constraint
+      filter.orgId, // device tank match
+      filter.orgId, // device vehicle match
+      filter.orgId, // vehicle
+      filter.orgId, // alert
+      filter.orgId, // alert note
+      filter.orgId, // scheduled report
+      filter.orgId, // report
+      filter.orgId, // user
+      ...filter.stationIds.map(reportStationLikePattern),
+    );
+  }
   if (filter.userId) {
     where.push("l.user_id = ?");
     params.push(filter.userId);
@@ -394,13 +503,13 @@ export async function listAuditLogs(filter: AuditFilter): Promise<{ rows: AuditL
   }
   const clause = where.length ? `WHERE ${where.join(" AND ")}` : "";
   const total = Number(
-    (await queryOne<{ n: number }>(`SELECT count(*) AS n FROM audit_logs l ${clause}`, params))?.n ?? 0,
+    (await queryOne<{ n: number }>(`${stationCte} SELECT count(*) AS n FROM audit_logs l ${clause}`, [...stationCteParams, ...params]))?.n ?? 0,
   );
   const page = Math.max(1, filter.page ?? 1);
   const pageSize = Math.min(200, Math.max(5, filter.pageSize ?? 25));
   const rows = (await query<Record<string, unknown>>(
-    `SELECT l.* FROM audit_logs l ${clause} ORDER BY l.ts DESC LIMIT ? OFFSET ?`,
-    [...params, pageSize, (page - 1) * pageSize],
+    `${stationCte} SELECT l.* FROM audit_logs l ${clause} ORDER BY l.ts DESC LIMIT ? OFFSET ?`,
+    [...stationCteParams, ...params, pageSize, (page - 1) * pageSize],
   ));
   return { rows: rows.map(mapAuditLog), total };
 }
@@ -472,11 +581,15 @@ export async function createNotification(input: {
   body: string;
   severity?: string;
   channel?: string;
+  idempotencyKey?: string;
 }): Promise<Notification> {
-  const notificationId = id("ntf");
+  const notificationId = input.idempotencyKey
+    ? `ntf_${createHash("sha256").update(input.idempotencyKey).digest("hex").slice(0, 48)}`
+    : id("ntf");
   (await execute(
     `INSERT INTO notifications (id, organization_id, user_id, alert_id, title, body, severity, channel)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (id) DO NOTHING`,
     [
       notificationId,
       input.organizationId,
@@ -496,36 +609,83 @@ export async function getNotification(notificationId: string): Promise<Notificat
   return row ? mapNotification(row) : null;
 }
 
-export async function listNotifications(orgId: string, limit = 30, userId?: string): Promise<Notification[]> {
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+function notificationStationClause(orgId: string, stationIds?: string[]): { sql: string; params: unknown[] } {
+  if (stationIds === undefined) return { sql: "", params: [] };
+  if (stationIds.length === 0) return { sql: " AND 1 = 0", params: [] };
+  const placeholders = stationIds.map(() => "?").join(", ");
+  return {
+    sql: ` AND (
+      alert_id IN (SELECT id FROM alerts WHERE organization_id = ? AND station_id IN (${placeholders}))
+      OR alert_id IN (SELECT 'event:' || id FROM fuel_events WHERE organization_id = ? AND station_id IN (${placeholders}))
+    )`,
+    params: [orgId, ...stationIds, orgId, ...stationIds],
+  };
+}
+
+export async function listNotifications(
+  orgId: string,
+  limit = 30,
+  userId?: string,
+  stationIds?: string[],
+): Promise<Notification[]> {
+  if (stationIds !== undefined && stationIds.length === 0) return [];
+  const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const readJoin = userId ? "LEFT JOIN notification_reads nr ON nr.notification_id = n.id AND nr.user_id = ?" : "";
+  const readState = userId
+    ? "CASE WHEN nr.notification_id IS NOT NULL THEN 1 WHEN n.user_id IS NULL AND n.is_read = 1 THEN 1 ELSE 0 END"
+    : "n.is_read";
+  const stationClause = notificationStationClause(orgId, stationIds);
   const rows = (await query<Record<string, unknown>>(
-    `SELECT * FROM notifications WHERE organization_id = ?${userClause} ORDER BY created_at DESC LIMIT ?`,
-    userId ? [orgId, userId, limit] : [orgId, limit],
+    `SELECT n.*, ${readState} AS read_for_user FROM notifications n ${readJoin}
+     WHERE n.organization_id = ?${userClause}${stationClause.sql} ORDER BY n.created_at DESC LIMIT ?`,
+    [...(userId ? [userId] : []), orgId, ...(userId ? [userId] : []), ...stationClause.params, limit],
   ));
   return rows.map(mapNotification);
 }
 
-export async function countUnreadNotifications(orgId: string, userId?: string): Promise<number> {
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
+export async function countUnreadNotifications(orgId: string, userId?: string, stationIds?: string[]): Promise<number> {
+  if (stationIds !== undefined && stationIds.length === 0) return 0;
+  const userClause = userId ? " AND (n.user_id IS NULL OR n.user_id = ?)" : "";
+  const readClause = userId
+    ? " AND (n.user_id IS NOT NULL OR n.is_read = 0) AND NOT EXISTS (SELECT 1 FROM notification_reads nr WHERE nr.notification_id = n.id AND nr.user_id = ?)"
+    : " AND n.is_read = 0";
+  const stationClause = notificationStationClause(orgId, stationIds);
   const row = (await queryOne<{ n: number }>(
-    `SELECT count(*) AS n FROM notifications WHERE organization_id = ? AND is_read = 0${userClause}`,
-    userId ? [orgId, userId] : [orgId],
+    `SELECT count(*) AS n FROM notifications n WHERE n.organization_id = ?${readClause}${userClause}${stationClause.sql}`,
+    [orgId, ...(userId ? [userId] : []), ...(userId ? [userId] : []), ...stationClause.params],
   ));
   return Number(row?.n ?? 0);
 }
 
-export async function markNotificationsRead(orgId: string, ids?: string[], userId?: string): Promise<number> {
-  const userClause = userId ? " AND (user_id IS NULL OR user_id = ?)" : "";
-  if (ids && ids.length > 0) {
-    const placeholders = ids.map(() => "?").join(", ");
-    const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ? AND id IN (${placeholders})${userClause}`, [
-      orgId,
-      ...ids,
-      ...(userId ? [userId] : []),
-    ]);
-    return result.changes;
+export async function markNotificationsRead(
+  orgId: string,
+  ids?: string[],
+  userId?: string,
+  stationIds?: string[],
+): Promise<number> {
+  if (stationIds !== undefined && stationIds.length === 0) return 0;
+  const stationClause = notificationStationClause(orgId, stationIds);
+  const selectedIds = ids?.filter((value) => typeof value === "string" && value.length > 0);
+  if (selectedIds && selectedIds.length === 0) return 0;
+
+  if (!userId) {
+    const idClause = selectedIds ? ` AND id IN (${selectedIds.map(() => "?").join(", ")})` : "";
+    const userClause = "";
+    return (await execute(
+      `UPDATE notifications SET is_read = 1 WHERE organization_id = ?${idClause}${userClause}${stationClause.sql}`,
+      [orgId, ...(selectedIds ?? []), ...stationClause.params],
+    )).changes;
   }
-  const result = await execute(`UPDATE notifications SET is_read = 1 WHERE organization_id = ?${userClause}`, [orgId, ...(userId ? [userId] : [])]);
+
+  const idClause = selectedIds ? ` AND n.id IN (${selectedIds.map(() => "?").join(", ")})` : "";
+  const now = new Date().toISOString();
+  const result = await execute(
+    `INSERT INTO notification_reads (notification_id, user_id, read_at)
+     SELECT n.id, ?, ? FROM notifications n
+     WHERE n.organization_id = ? AND (n.user_id IS NULL OR n.user_id = ?)${idClause}${stationClause.sql}
+     ON CONFLICT (notification_id, user_id) DO NOTHING`,
+    [userId, now, orgId, userId, ...(selectedIds ?? []), ...stationClause.params],
+  );
   return result.changes;
 }
 
@@ -534,12 +694,12 @@ function mapNotification(row: Record<string, unknown>): Notification {
     id: String(row.id),
     organizationId: String(row.organization_id),
     userId: row.user_id == null ? null : String(row.user_id),
-    alertId: row.alert_id == null ? null : String(row.alert_id),
+    alertId: row.alert_id == null || String(row.alert_id).startsWith("event:") ? null : String(row.alert_id),
     title: String(row.title),
     body: String(row.body),
     severity: String(row.severity) as Notification["severity"],
     channel: String(row.channel),
-    isRead: intToBool(row.is_read),
+    isRead: intToBool(row.read_for_user ?? row.is_read),
     createdAt: String(row.created_at),
   };
 }
@@ -654,10 +814,6 @@ export async function updateIntegration(
   values.push(integrationId);
   (await execute(`UPDATE integrations SET ${fields.join(", ")}, updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id = ?`, values));
   return (await getIntegration(integrationId));
-}
-
-export async function deleteIntegration(integrationId: string): Promise<void> {
-  (await execute("DELETE FROM integrations WHERE id = ?", [integrationId]));
 }
 
 function mapIntegration(row: Record<string, unknown>): Integration {

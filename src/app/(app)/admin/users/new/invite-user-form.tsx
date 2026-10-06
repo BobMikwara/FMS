@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Field, Input, Select, Switch } from "@/components/ui/form";
+import { Field, Input, Select } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui/layout";
 import { useToast } from "@/components/ui/feedback";
@@ -25,7 +25,7 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [invitedEmail, setInvitedEmail] = useState<string | null>(null);
-  const [temporaryPassword, setTemporaryPassword] = useState<string | null>(null);
+  const [invitationSent, setInvitationSent] = useState<boolean | null>(null);
 
   const defaultRole = useMemo(() => roles.find((role) => role.key === "viewer") ?? roles[0], [roles]);
 
@@ -35,12 +35,12 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
     phone: "",
     jobTitle: "",
     roleId: "",
-    password: "",
-    mfaEnabled: false,
     stationIds: [] as string[],
   });
 
   const roleId = form.roleId || defaultRole?.id || "";
+  const selectedRole = roles.find((role) => role.id === roleId);
+  const organizationWideRole = selectedRole?.key === "admin" || selectedRole?.key === "super_admin" || selectedRole?.key === "owner";
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -56,17 +56,17 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
           phone: form.phone.trim() || null,
           jobTitle: form.jobTitle.trim() || null,
           roleId,
-          password: form.password,
-          mfaEnabled: form.mfaEnabled,
           stationIds: form.stationIds,
         }),
       });
       const payload = await response.json();
       if (payload.ok) {
+        const emailSent = payload.data?.invitationEmailSent === true;
         setInvitedEmail(form.email.trim());
-        setTemporaryPassword(form.password);
-        toast.success("User invited", form.email.trim());
-        setForm({ ...form, name: "", email: "", phone: "", jobTitle: "", password: "" });
+        setInvitationSent(emailSent);
+        if (emailSent) toast.success("Invitation email sent", form.email.trim());
+        else toast.error("Account created, but invitation email was not sent.");
+        setForm({ ...form, name: "", email: "", phone: "", jobTitle: "" });
         queryRefresh();
       } else {
         setError(payload.error?.message ?? "Could not create the user.");
@@ -85,10 +85,10 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
       {error ? <Notice tone="crit" title="Could not create the user">{error}</Notice> : null}
 
       {invitedEmail ? (
-        <Notice tone="ok" title="User invited">
-          {invitedEmail} can now sign in. Temporary password:{" "}
-          <code className="rounded bg-[var(--surface-3)] px-1.5 py-0.5 text-[0.75rem]">{temporaryPassword}</code> - they
-          should change it after their first sign-in.
+        <Notice tone={invitationSent ? "ok" : "warn"} title={invitationSent ? "Invitation sent" : "Invitation email not sent"}>
+          {invitationSent
+            ? `${invitedEmail} will receive a one-time activation link. The account remains invited until a password is set.`
+            : `${invitedEmail} has an invited account, but email delivery failed or SMTP is not configured. Configure SMTP and use Resend invitation in the users list.`}
         </Notice>
       ) : null}
 
@@ -132,65 +132,57 @@ export function InviteUserForm({ roles, stations }: { roles: RoleOption[]; stati
           <Select
             id="invite-role"
             value={roleId}
-            onChange={(event) => setForm({ ...form, roleId: event.target.value })}
+            onChange={(event) => {
+              const nextRole = roles.find((role) => role.id === event.target.value);
+              setForm({
+                ...form,
+                roleId: event.target.value,
+                stationIds: nextRole && ["admin", "super_admin", "owner"].includes(nextRole.key) ? [] : form.stationIds,
+              });
+            }}
             options={roles.map((role) => ({ value: role.id, label: role.name }))}
-          />
-        </Field>
-        <Field
-          label="Temporary password"
-          htmlFor="invite-password"
-          required
-          hint="At least 10 characters. Ask them to change it after sign-in."
-        >
-          <Input
-            id="invite-password"
-            type="text"
-            required
-            minLength={10}
-            value={form.password}
-            onChange={(event) => setForm({ ...form, password: event.target.value })}
           />
         </Field>
       </div>
 
       <div>
         <p className="mb-2 text-[0.8125rem] font-medium text-[var(--ink)]">Station access</p>
-        <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
-          Leave every station unselected to grant access to the whole organization. Managers and operators should be scoped
-          to the sites they run.
-        </p>
-        <div className="grid max-h-52 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2">
-          {stations.map((station) => (
-            <label key={station.id} className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-[var(--line-strong)]"
-                checked={form.stationIds.includes(station.id)}
-                onChange={() =>
-                  setForm((current) => ({
-                    ...current,
-                    stationIds: current.stationIds.includes(station.id)
-                      ? current.stationIds.filter((id) => id !== station.id)
-                      : [...current.stationIds, station.id],
-                  }))
-                }
-              />
-              <span className="truncate">{station.name}</span>
-            </label>
-          ))}
-        </div>
+        {organizationWideRole ? (
+          <p className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">
+            This administrator role has organization-wide station access. Other roles must be assigned to at least one station.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
+              Select the stations this user may access. Non-administrator accounts need at least one station assignment.
+            </p>
+            <div className="grid max-h-52 gap-2 overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3 sm:grid-cols-2">
+              {stations.map((station) => (
+                <label key={station.id} className="flex cursor-pointer items-center gap-2.5 text-[0.8125rem] text-[var(--ink)]">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-[var(--line-strong)]"
+                    checked={form.stationIds.includes(station.id)}
+                    onChange={() =>
+                      setForm((current) => ({
+                        ...current,
+                        stationIds: current.stationIds.includes(station.id)
+                          ? current.stationIds.filter((id) => id !== station.id)
+                          : [...current.stationIds, station.id],
+                      }))
+                    }
+                  />
+                  <span className="truncate">{station.name}</span>
+                </label>
+              ))}
+            </div>
+          </>
+        )}
       </div>
-
-      <Switch
-        checked={form.mfaEnabled}
-        onChange={(value) => setForm({ ...form, mfaEnabled: value })}
-        label="Require multi-factor authentication"
-        description="Adds a second factor at sign-in for this user."
-      />
 
       <div className="flex items-center gap-3 border-t border-[var(--line)] pt-5">
         <Button type="submit" loading={busy}>
-          Invite user
+          Send invitation
         </Button>
         <Link href="/admin/users" className="btn btn-ghost btn-sm">
           Cancel

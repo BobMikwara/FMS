@@ -1,3 +1,4 @@
+import { hasOrganizationWideStationAccess, isPlatformOwner, userCanAccessStation } from "@/server/auth/authorization";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
@@ -12,14 +13,16 @@ export default async function InviteUserPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const roles = (await listRoles());
-  const stations = (await listAllStations(user.organizationId));
+  const roles = (await listRoles()).filter((role) =>
+    hasOrganizationWideStationAccess(user) || (role.key !== "admin" && !isPlatformOwner(role.key)),
+  );
+  const stations = (await listAllStations(user.organizationId)).filter((station) => userCanAccessStation(user, station.id));
 
   return (
     <div className="space-y-5">
       <PageHeader
         title="Invite user"
-        description="Create an account for a colleague. They can sign in immediately with the temporary password you set."
+        description="Send a one-time account activation link. The user sets their own password before the account becomes active."
         breadcrumbs={[{ label: "Users", href: "/admin/users" }, { label: "Invite user" }]}
         actions={
           <Link href="/admin/users" className="btn btn-secondary btn-sm">
@@ -28,9 +31,9 @@ export default async function InviteUserPage() {
         }
       />
 
-      <Notice tone="info" title="Pick a temporary password">
-        Use at least 10 characters and ask the person to change it after their first sign-in. Passwords are stored hashed,
-        never in plain text, and are never shown again once the account exists.
+      <Notice tone="info" title="Activation requires email delivery">
+        The account stays invited until the recipient follows a one-time link and sets a password. Configure SMTP and AUTH_URL
+        for invitation delivery; no temporary password is displayed or sent.
       </Notice>
 
       <InviteUserForm

@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { formatDateTime, formatNumber, timeAgo } from "@/lib/utils";
+import { formatNumber, timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone, dayStartInTimeZone } from "@/server/services/time-zone";
 import { Select } from "@/components/ui/form";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { EmptyState } from "@/components/ui/feedback";
@@ -22,6 +23,7 @@ interface MovementRow {
   tankId: string;
   stationId: string;
   deviceId: string | null;
+  timeZone: string;
   tankName?: string;
   stationName?: string;
 }
@@ -38,10 +40,12 @@ export function MovementsBrowser({
   initialRows,
   from,
   to,
+  organizationTimeZone,
 }: {
   initialRows: MovementRow[];
   from: string;
   to: string;
+  organizationTimeZone: string;
 }) {
   const query = useResourceQuery<MovementRow>({
     endpoint: "/api/movements",
@@ -55,11 +59,11 @@ export function MovementsBrowser({
     () => [
       {
         key: "ts",
-        header: "Timestamp",
+        header: "Timestamp (station local)",
         cell: (row) => (
           <div>
-            <p className="text-num text-[0.8125rem] text-[var(--ink)]">{formatDateTime(row.ts)}</p>
-            <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{timeAgo(row.ts)}</p>
+            <p className="text-num text-[0.8125rem] text-[var(--ink)]">{formatDateTimeInTimeZone(row.ts, row.timeZone)}</p>
+            <p className="mt-0.5 text-[0.6875rem] text-[var(--ink-3)]">{timeAgo(row.ts)} · {row.timeZone}</p>
           </div>
         ),
       },
@@ -142,7 +146,7 @@ export function MovementsBrowser({
   const applyRange = (days: string) => {
     setRange(days);
     if (days === "custom") return;
-    query.setFilter("from", isoDaysAgo(Number(days)));
+    query.setFilter("from", isoDaysAgo(Number(days), organizationTimeZone));
   };
 
   return (
@@ -170,7 +174,7 @@ export function MovementsBrowser({
           filename="fuel-movement-ledger"
           disabled={query.loading}
           columns={[
-            { header: "Timestamp", value: (row) => row.ts },
+            { header: "Timestamp (station local time)", value: (row) => `${formatDateTimeInTimeZone(row.ts, row.timeZone)} (${row.timeZone})` },
             { header: "Movement", value: (row) => row.type },
             { header: "Tank", value: (row) => row.tankName ?? row.tankId },
             { header: "Station", value: (row) => row.stationName ?? row.stationId },
@@ -211,6 +215,8 @@ export function MovementsBrowser({
   );
 }
 
-function isoDaysAgo(days: number): string {
-  return new Date(Date.now() - days * 86_400_000).toISOString();
+function isoDaysAgo(days: number, timeZone: string): string {
+  const now = new Date();
+  if (days <= 1) return new Date(now.getTime() - 86_400_000).toISOString();
+  return dayStartInTimeZone(now, -(days - 1), timeZone).toISOString();
 }

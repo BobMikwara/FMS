@@ -21,6 +21,10 @@ const ROOT = resolve(process.cwd());
 const DATABASE_URL = process.env.DATABASE_URL ?? "file:./db/smartfuel.db";
 const DB_PROVIDER = process.env.DB_PROVIDER ?? (DATABASE_URL.startsWith("postgres") ? "postgresql" : "sqlite");
 const USE_POSTGRES = DB_PROVIDER === "postgresql" || DATABASE_URL.startsWith("postgres://") || DATABASE_URL.startsWith("postgresql://");
+
+export function isPostgres(): boolean {
+  return USE_POSTGRES;
+}
 const DEFAULT_DB_PATH = join(ROOT, "db", "smartfuel.db");
 
 type PostgresConnection = Sql<Record<string, postgres.PostgresType>>;
@@ -28,6 +32,8 @@ type PostgresConnection = Sql<Record<string, postgres.PostgresType>>;
 let sqliteInstance: DatabaseSync | null = null;
 let postgresInstance: PostgresConnection | null = null;
 const transactionStore = new AsyncLocalStorage<PostgresConnection>();
+const sqliteTransactionStore = new AsyncLocalStorage<{ active: boolean }>();
+let sqliteQueue: Promise<void> = Promise.resolve();
 let schemaReady = false;
 let schemaPromise: Promise<void> | null = null;
 
@@ -52,6 +58,25 @@ function sqlite(): DatabaseSync {
   instance.exec("PRAGMA busy_timeout = 5000;");
   sqliteInstance = instance;
   return instance;
+}
+
+// DatabaseSync has one process-wide connection. Keep unrelated statements out
+// of an open async transaction, while calls from that transaction inherit its
+// context and use the connection without trying to reacquire the queue.
+async function withSqliteAccess<T>(fn: () => T | Promise<T>): Promise<T> {
+  if (sqliteTransactionStore.getStore()?.active) return await fn();
+
+  const previous = sqliteQueue;
+  let release!: () => void;
+  sqliteQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 function postgresDb(): PostgresConnection {
@@ -97,13 +122,13 @@ function postgresParameters(params: unknown[]): PostgresParameter[] {
   });
 }
 
-function postgresSql(sql: string): string {
+export function translateSqlForPostgres(sql: string): string {
   const pgNow = `to_char(CURRENT_TIMESTAMP AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
   const pgSevenDaysAgo = `to_char((CURRENT_TIMESTAMP - INTERVAL '7 days') AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
   let translated = sql
     .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now','-7 days'\)/g, pgSevenDaysAgo)
     .replace(/strftime\('%Y-%m-%dT%H:%M:%SZ','now'\)/g, pgNow)
-    .replace(/strftime\('%Y-%m-%dT%H:00',\s*([a-zA-Z0-9_.]+)\)/g, "to_char(date_trunc('hour', $1::timestamptz) AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:00')")
+    .replace(/strftime\('%Y-%m-%dT%H:00',\s*([a-zA-Z0-9_.]+)\)/g, "to_char(date_trunc('hour', ($1::timestamptz AT TIME ZONE 'UTC')), 'YYYY-MM-DD\"T\"HH24:00')")
     .replace(/strftime\('%Y-%m-%d',\s*([a-zA-Z0-9_.]+)\)/g, "to_char($1::timestamptz AT TIME ZONE 'UTC', 'YYYY-MM-DD')");
   let index = 0;
   return translated.replace(/\?/g, () => `$${++index}`);
@@ -140,20 +165,24 @@ export type Row = Record<string, unknown>;
 
 export async function query<T = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
   await ensureSchema();
-  if (USE_POSTGRES) return (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
-  const stmt = sqlite().prepare(sql);
-  return stmt.all(...(params as never[])) as T[];
+  if (USE_POSTGRES) return (await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params))) as T[];
+  return await withSqliteAccess(() => {
+    const stmt = sqlite().prepare(sql);
+    return stmt.all(...(params as never[])) as T[];
+  });
 }
 
 export async function queryOne<T = Row>(sql: string, params: unknown[] = []): Promise<T | null> {
   await ensureSchema();
   if (USE_POSTGRES) {
-    const rows = (await postgresDb().unsafe(postgresSql(sql), postgresParameters(params))) as T[];
+    const rows = (await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params))) as T[];
     return rows[0] ?? null;
   }
-  const stmt = sqlite().prepare(sql);
-  const row = stmt.get(...(params as never[])) as T | undefined;
-  return row ?? null;
+  return await withSqliteAccess(() => {
+    const stmt = sqlite().prepare(sql);
+    const row = stmt.get(...(params as never[])) as T | undefined;
+    return row ?? null;
+  });
 }
 
 export async function execute(
@@ -162,12 +191,14 @@ export async function execute(
 ): Promise<{ changes: number; lastInsertRowid: number | bigint }> {
   await ensureSchema();
   if (USE_POSTGRES) {
-    const result = await postgresDb().unsafe(postgresSql(sql), postgresParameters(params));
+    const result = await postgresDb().unsafe(translateSqlForPostgres(sql), postgresParameters(params));
     return { changes: Number(result.count ?? 0), lastInsertRowid: 0 };
   }
-  const stmt = sqlite().prepare(sql);
-  const result = stmt.run(...(params as never[]));
-  return { changes: Number(result.changes), lastInsertRowid: result.lastInsertRowid };
+  return await withSqliteAccess(() => {
+    const stmt = sqlite().prepare(sql);
+    const result = stmt.run(...(params as never[]));
+    return { changes: Number(result.changes), lastInsertRowid: result.lastInsertRowid };
+  });
 }
 
 export async function exec(sql: string): Promise<void> {
@@ -176,29 +207,36 @@ export async function exec(sql: string): Promise<void> {
     await postgresDb().unsafe(sql);
     return;
   }
-  sqlite().exec(sql);
+  await withSqliteAccess(() => sqlite().exec(sql));
 }
 
 /** Runs an async callback inside a transaction. Repository calls inherit the transaction connection. */
 export async function transaction<T>(fn: () => Promise<T>): Promise<T> {
   await ensureSchema();
   if (USE_POSTGRES) {
+    if (transactionStore.getStore()) return await fn();
     return (await postgresDb().begin(async (tx) => transactionStore.run(tx as unknown as PostgresConnection, fn))) as T;
   }
-  const database = sqlite();
-  database.exec("BEGIN");
-  try {
-    const result = await fn();
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
+  if (sqliteTransactionStore.getStore()?.active) return await fn();
+  return await withSqliteAccess(async () => {
+    const database = sqlite();
+    database.exec("BEGIN IMMEDIATE");
+    const context = { active: true };
     try {
-      database.exec("ROLLBACK");
-    } catch {
-      /* already rolled back */
+      const result = await sqliteTransactionStore.run(context, fn);
+      database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+        /* already rolled back */
+      }
+      throw error;
+    } finally {
+      context.active = false;
     }
-    throw error;
-  }
+  });
 }
 
 /** Bulk insert helper. PostgreSQL receives one parameterised statement. */
@@ -229,15 +267,17 @@ export async function insertMany(
     return inserted;
   }
 
-  const database = sqlite();
-  const placeholders = columns.map(() => "?").join(", ");
-  const statement = database.prepare(`INSERT INTO ${safeIdentifier(table)} (${columns.map(safeIdentifier).join(", ")}) VALUES (${placeholders})`);
-  let inserted = 0;
-  for (let i = 0; i < insertedRows.length; i += chunkSize) {
-    for (const row of insertedRows.slice(i, i + chunkSize)) statement.run(...(row as never[]));
-    inserted += Math.min(chunkSize, insertedRows.length - i);
-  }
-  return inserted;
+  return await withSqliteAccess(() => {
+    const database = sqlite();
+    const placeholders = columns.map(() => "?").join(", ");
+    const statement = database.prepare(`INSERT INTO ${safeIdentifier(table)} (${columns.map(safeIdentifier).join(", ")}) VALUES (${placeholders})`);
+    let inserted = 0;
+    for (let i = 0; i < insertedRows.length; i += chunkSize) {
+      for (const row of insertedRows.slice(i, i + chunkSize)) statement.run(...(row as never[]));
+      inserted += Math.min(chunkSize, insertedRows.length - i);
+    }
+    return inserted;
+  });
 }
 
 function safeIdentifier(value: string): string {

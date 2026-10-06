@@ -1,6 +1,8 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
-import { listAuditLogs } from "@/server/db/repo/core";
+import { getOrganization, listAuditLogs } from "@/server/db/repo/core";
+import { normalizeTimeZone } from "@/server/services/time-zone";
 import { PageHeader, Notice } from "@/components/ui/layout";
 import { AuditLogBrowser } from "./audit-log-browser";
 
@@ -10,9 +12,13 @@ export default async function AuditLogsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const logs = (await listAuditLogs({ orgId: user.organizationId, pageSize: 500 })).rows;
+  const [logResult, organization] = await Promise.all([
+    listAuditLogs({ orgId: user.organizationId, pageSize: 500, stationIds: stationScopeForUser(user) }),
+    getOrganization(user.organizationId),
+  ]);
+  const timeZone = normalizeTimeZone(organization?.timezone);
 
-  const rows = logs.map((log) => ({
+  const rows = logResult.rows.map((log) => ({
     id: log.id,
     action: log.action,
     entityType: log.entity,
@@ -22,6 +28,7 @@ export default async function AuditLogsPage() {
     actorEmail: "",
     ipAddress: log.ip,
     createdAt: log.ts,
+    timeZone,
     metadata: log.summary,
   }));
 
@@ -29,7 +36,7 @@ export default async function AuditLogsPage() {
     <div className="space-y-5">
       <PageHeader
         title="Audit log"
-        description="Every write action across this organization, newest first. Entries are append-only and cannot be edited or deleted from the interface."
+        description={`Every write action across this organization, newest first. Times are shown in ${timeZone}; entries are append-only and cannot be edited or deleted from the interface.`}
         breadcrumbs={[{ label: "Administration" }, { label: "Audit log" }]}
       />
 

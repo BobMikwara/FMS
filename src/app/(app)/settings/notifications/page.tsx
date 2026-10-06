@@ -1,93 +1,87 @@
 import { redirect } from "next/navigation";
+import { Badge } from "@/components/ui/feedback";
 import { getCurrentUser } from "@/server/auth/session";
-import { listUsers } from "@/server/db/repo/core";
-import { getSettings } from "@/server/db/repo/core";
+import { listUserNotificationDeliveries } from "@/server/db/repo/deliveries";
+import { getOrganization } from "@/server/db/repo/core";
+import { emailDeliveryConfigured } from "@/server/email/mailer";
+import { formatDateTimeInTimeZone, normalizeTimeZone } from "@/server/services/time-zone";
 import { PageHeader, Notice } from "@/components/ui/layout";
-import { NotificationSettingsForm } from "./notification-settings-form";
 
 export const dynamic = "force-dynamic";
 
-const CHANNEL_LABELS: Record<string, string> = {
-  email: "Email",
-  sms: "SMS",
-  push: "Push",
-  in_app: "In-app",
-};
+function statusTone(status: string): "ok" | "warn" | "crit" | "neutral" {
+  if (status === "delivered") return "ok";
+  if (status === "queued" || status === "sending") return "warn";
+  if (status === "failed") return "crit";
+  return "neutral";
+}
 
 export default async function NotificationSettingsPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-
-  const settings = (await getSettings(user.organizationId));
-  const users = (await listUsers(user.organizationId));
-
-  const notifications = (settings.notifications ?? {}) as Record<string, unknown>;
+  const [deliveries, organization] = await Promise.all([
+    listUserNotificationDeliveries(user.organizationId, user.id, 30),
+    getOrganization(user.organizationId),
+  ]);
+  const timeZone = normalizeTimeZone(organization?.timezone);
+  const mailConfigured = emailDeliveryConfigured();
 
   return (
     <div className="space-y-5">
       <PageHeader
-        title="Notifications"
-        description="Which alerts reach which people, on which channel, and how often summaries are sent."
+        title="Notifications and delivery"
+        description="In-app alerts have individual read state. Email attempts and scheduled-report deliveries are recorded per recipient."
         breadcrumbs={[{ label: "Settings" }, { label: "Notifications" }]}
       />
 
-      <Notice tone="info" title="Alerts always reach the interface first">
-        Every alert appears in the notification centre and on the dashboard regardless of these settings. Email, SMS and
-        push are additional channels - turning them off never hides an alert from the people on shift.
+      <Notice tone="ok" title="In-app notifications are active">
+        Alerts and refill events are scoped to the stations you can access. Reading a notification changes only your own
+        read state.
       </Notice>
 
-      <NotificationSettingsForm
-        initial={{
-          channelsEnabled: Array.isArray(notifications.channels)
-            ? (notifications.channels as string[])
-            : ["in_app", "email"],
-          criticalChannels: Array.isArray(notifications.criticalChannels)
-            ? (notifications.criticalChannels as string[])
-            : ["in_app", "email", "sms"],
-          dailyDigest: notifications.dailyDigest === true,
-          weeklyDigest: notifications.weeklyDigest !== false,
-          quietHoursStart: typeof notifications.quietHoursStart === "string" ? notifications.quietHoursStart : "22:00",
-          quietHoursEnd: typeof notifications.quietHoursEnd === "string" ? notifications.quietHoursEnd : "06:00",
-          recipients:
-            Array.isArray(notifications.recipients) && notifications.recipients.length > 0
-              ? (notifications.recipients as string[])
-              : users.filter((entry) => entry.status === "active").map((entry) => entry.email),
-        }}
-        users={users.map((entry) => ({ id: entry.id, name: entry.name, email: entry.email, roleName: entry.roleName }))}
-      />
+      {!mailConfigured ? (
+        <Notice tone="info" title="SMTP is not configured">
+          In-app notifications continue to work. Email and scheduled-report deliveries remain queued without consuming
+          attempts until SMTP is configured; transient provider errors are retried automatically.
+        </Notice>
+      ) : null}
 
-      <section className="card max-w-3xl p-5">
-        <h2 className="text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">Channels</h2>
-        <dl className="mt-3 space-y-2 text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
-          <div className="flex gap-2">
-            <dt className="w-20 shrink-0 font-medium text-[var(--ink)]">In-app</dt>
-            <dd>Always on. Delivered instantly through the real-time channel.</dd>
+      <section className="card overflow-hidden">
+        <div className="border-b border-[var(--line)] px-5 py-3.5">
+          <h2 className="text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">Your recent delivery status</h2>
+          <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
+            The newest 30 email and in-app delivery records for your account. Secrets and message payloads are not shown.
+          </p>
+        </div>
+        {deliveries.length === 0 ? (
+          <div className="px-5 py-8 text-center text-[0.8125rem] text-[var(--ink-2)]">
+            No delivery attempts have been recorded for your account yet.
           </div>
-          <div className="flex gap-2">
-            <dt className="w-20 shrink-0 font-medium text-[var(--ink)]">Email</dt>
-            <dd>
-              Sent through the organization's mail relay. Requires{" "}
-              <code className="rounded bg-[var(--surface-3)] px-1 py-0.5 text-[0.75rem]">SMTP_*</code> environment
-              variables; without them the platform records the failure instead of pretending it sent.
-            </dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-20 shrink-0 font-medium text-[var(--ink)]">SMS</dt>
-            <dd>
-              Reserved for critical alerts. Requires an SMS provider credential in the deployment environment.
-            </dd>
-          </div>
-          <div className="flex gap-2">
-            <dt className="w-20 shrink-0 font-medium text-[var(--ink)]">Push</dt>
-            <dd>Browser push, available once the app is installed as a PWA.</dd>
-          </div>
-        </dl>
-        <p className="mt-3 text-[0.75rem] text-[var(--ink-3)]">
-          Active channels: {Object.entries(CHANNEL_LABELS)
-            .map(([key, label]) => `${key} → ${label}`)
-            .join(", ")}
-          .
-        </p>
+        ) : (
+          <ul className="divide-y divide-[var(--line)]">
+            {deliveries.map((delivery) => (
+              <li key={delivery.id} className="flex flex-wrap items-start gap-3 px-5 py-3.5">
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-[0.8125rem] font-medium capitalize text-[var(--ink)]">
+                      {delivery.channel === "email" && delivery.scheduledReportRunId ? "Scheduled report email" : `${delivery.channel} notification`}
+                    </p>
+                    <Badge tone={statusTone(delivery.status)}>{delivery.status}</Badge>
+                  </div>
+                  <p className="mt-1 break-all text-[0.75rem] text-[var(--ink-2)]">{delivery.recipient}</p>
+                  <p className="mt-1 text-[0.6875rem] text-[var(--ink-3)]">
+                    Created {formatDateTimeInTimeZone(delivery.createdAt, timeZone)} ({timeZone}) · {delivery.attemptCount} of {delivery.maxAttempts} attempts
+                    {delivery.deliveredAt ? ` · delivered ${formatDateTimeInTimeZone(delivery.deliveredAt, timeZone)}` : ""}
+                    {delivery.nextAttemptAt ? ` · retry ${formatDateTimeInTimeZone(delivery.nextAttemptAt, timeZone)}` : ""}
+                  </p>
+                  {delivery.lastError ? (
+                    <p className="mt-1 text-[0.6875rem] text-[var(--crit)]">{delivery.lastError}</p>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </div>
   );

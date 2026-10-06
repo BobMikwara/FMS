@@ -1,5 +1,6 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import Link from "next/link";
-import { getCurrentUser } from "@/server/auth/session";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listAllStations, listAllTanks, listFuelTypes } from "@/server/db/repo/stations";
 import { PageHeader } from "@/components/ui/layout";
 import { TanksBrowser } from "./tanks-browser";
@@ -11,9 +12,9 @@ export default async function TanksPage() {
   if (!user) return null;
 
   const allStations = await listAllStations(user.organizationId);
-  const stations = allStations.filter((station) => user.stationIds.length === 0 || user.stationIds.includes(station.id));
+  const stations = allStations.filter((station) => userCanAccessStation(user, station.id));
   const tanks = (await listAllTanks(user.organizationId))
-    .filter((tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId))
+    .filter((tank) => userCanAccessStation(user, tank.stationId))
     .filter((tank) => !tank.isArchived);
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
 
@@ -30,6 +31,7 @@ export default async function TanksPage() {
       currentVolume: tank.currentVolume,
       levelPercent: Number(percent.toFixed(1)),
       status: tank.status,
+      isArchived: tank.isArchived,
       tankType: tank.tankType,
       lowThresholdPct: tank.lowThresholdPct,
       criticalThresholdPct: tank.criticalThresholdPct,
@@ -45,11 +47,11 @@ export default async function TanksPage() {
       <PageHeader
         title="Tanks"
         description="Every monitored tank across your network, with measured volume, status and configured thresholds."
-        actions={
+        actions={hasPermission(user, "tanks.create") ? (
           <Link href="/tanks/new" className="btn btn-primary btn-sm">
             Add tank
           </Link>
-        }
+        ) : undefined}
       />
       <TanksBrowser
         initialRows={rows}
@@ -60,6 +62,8 @@ export default async function TanksPage() {
           color: fuelType.color,
           systemName: fuelType.systemName,
         }))}
+        canCreate={hasPermission(user, "tanks.create")}
+        canArchive={hasPermission(user, "tanks.delete")}
       />
     </div>
   );

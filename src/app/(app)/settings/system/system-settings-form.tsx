@@ -16,7 +16,6 @@ export function SystemSettingsForm({
     offlineTimeoutMin: number;
     reconciliationVariancePct: number;
     simulatorEnabled: boolean;
-    realtimeTransport: string;
     rateLimitMax: number;
   };
 }) {
@@ -34,7 +33,13 @@ export function SystemSettingsForm({
       const response = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ system: form }),
+        body: JSON.stringify({
+          system: {
+            readingIntervalSec: form.readingIntervalSec,
+            offlineTimeoutMin: form.offlineTimeoutMin,
+            reconciliationVariancePct: form.reconciliationVariancePct,
+          },
+        }),
       });
       const payload = await response.json();
       if (payload.ok) {
@@ -60,7 +65,7 @@ export function SystemSettingsForm({
           <div>
             <h2 className="text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">Data & timing</h2>
             <p className="mt-1 text-[0.8125rem] text-[var(--ink-2)]">
-              How long raw readings are kept and how quickly a silent device is treated as offline.
+              These controls are consumed by telemetry freshness, device-health monitoring, and reconciliation.
             </p>
           </div>
           {saved ? (
@@ -72,21 +77,19 @@ export function SystemSettingsForm({
         </div>
 
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
+            <p className="text-[0.6875rem] font-medium uppercase tracking-wide text-[var(--ink-3)]">Retention policy</p>
+            <p className="mt-1 text-[0.875rem] font-medium text-[var(--ink)]">Not active</p>
+            <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--ink-2)]">
+              No readings are automatically deleted. The stored {form.retentionDays}-day legacy value is not applied; a
+              retention policy requires separate approval.
+            </p>
+          </div>
           <Field
-            label="Reading retention (days)"
-            htmlFor="sys-retention"
-            hint="Raw readings older than this are pruned. Derived events are kept indefinitely."
+            label="Expected reading interval (seconds)"
+            htmlFor="sys-interval"
+            hint="Telemetry is shown as live for 1.5 times this interval, then delayed until the offline timeout."
           >
-            <Input
-              id="sys-retention"
-              type="number"
-              min={7}
-              max={3650}
-              value={form.retentionDays}
-              onChange={(event) => setForm({ ...form, retentionDays: Number(event.target.value) })}
-            />
-          </Field>
-          <Field label="Expected reading interval (seconds)" htmlFor="sys-interval">
             <Input
               id="sys-interval"
               type="number"
@@ -134,11 +137,7 @@ export function SystemSettingsForm({
           These values come from the deployment environment and are shown here for verification. They cannot be changed
           from the interface, because they affect every tenant on the instance.
         </p>
-        <dl className="mt-4 grid gap-3 sm:grid-cols-3">
-          <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
-            <dt className="text-[0.6875rem] uppercase tracking-wide text-[var(--ink-3)]">Realtime transport</dt>
-            <dd className="mt-1 text-[0.875rem] font-medium text-[var(--ink)]">{form.realtimeTransport}</dd>
-          </div>
+        <dl className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-2)] p-3">
             <dt className="text-[0.6875rem] uppercase tracking-wide text-[var(--ink-3)]">Rate limit / window</dt>
             <dd className="text-num mt-1 text-[0.875rem] font-medium text-[var(--ink)]">{form.rateLimitMax}</dd>

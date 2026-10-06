@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/server/auth/session";
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { listFuelTypes, listAllTanks } from "@/server/db/repo/stations";
 import { PageHeader, Notice } from "@/components/ui/layout";
 import { FuelTypesBrowser } from "./fuel-types-browser";
@@ -12,7 +13,8 @@ export default async function FuelTypesPage() {
   if (!user) redirect("/login");
 
   const fuelTypes = (await listFuelTypes(user.organizationId));
-  const tanks = (await listAllTanks(user.organizationId));
+  const tanks = (await listAllTanks(user.organizationId))
+    .filter((tank) => userCanAccessStation(user, tank.stationId));
 
   const rows = fuelTypes.map((fuel) => ({
     id: fuel.id,
@@ -33,9 +35,9 @@ export default async function FuelTypesPage() {
         breadcrumbs={[{ label: "Settings" }, { label: "Fuel types" }]}
       />
 
-      <Notice tone="info" title="Deleting a fuel type">
-        A fuel type in use by a tank cannot be deleted - reassign or archive those tanks first. This protects the movement
-        ledger from losing its meaning.
+      <Notice tone="info" title="Deactivating a fuel type">
+        A fuel type in use by a tank cannot be deactivated. Reassign or archive those tanks first. Deactivation keeps
+        historical movements and reports intact.
       </Notice>
 
       <FuelTypesBrowser initialRows={rows} />

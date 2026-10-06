@@ -14,7 +14,7 @@ export type DeviceStatus = "online" | "delayed" | "offline" | "fault" | "never_c
 export type AlertStatus = "active" | "acknowledged" | "resolved";
 export type AlertSeverity = "critical" | "warning" | "info";
 export type VehicleStatus = "active" | "maintenance" | "inactive";
-export type DataState = "live" | "delayed" | "stale" | "offline";
+export type DataState = "live" | "delayed" | "stale" | "unknown" | "offline";
 
 export function tankStatusTone(status: TankStatus): StatusTone {
   return status === "full"
@@ -89,11 +89,19 @@ export function vehicleStatusLabel(status: VehicleStatus): string {
 }
 
 export function dataStateTone(state: DataState): StatusTone {
-  return state === "live" ? "ok" : state === "delayed" ? "warn" : state === "stale" ? "warn" : "crit";
+  return state === "live" ? "ok" : state === "delayed" || state === "stale" ? "warn" : state === "unknown" ? "neutral" : "crit";
 }
 
 export function dataStateLabel(state: DataState): string {
-  return state === "live" ? "Live" : state === "delayed" ? "Delayed" : state === "stale" ? "Stale data" : "Offline";
+  return state === "live"
+    ? "Live"
+    : state === "delayed"
+      ? "Delayed"
+      : state === "stale"
+        ? "Stale data"
+        : state === "unknown"
+          ? "Unknown"
+          : "Offline";
 }
 
 /** Human-readable label for a derived fuel movement. */
@@ -139,7 +147,7 @@ export function confidenceTone(confidence: string): StatusTone {
 }
 
 /** Tank state thresholds from the PRD (§59), used for copy and validation. */
-export function tankStateForPercent(percent: number, criticalPct = 15, lowPct = 30, fullPct = 85): TankStatus {
+export function tankStateForPercent(percent: number, criticalPct = 10, lowPct = 20, fullPct = 95): TankStatus {
   if (percent >= fullPct) return "full";
   if (percent >= lowPct) return "normal";
   if (percent >= criticalPct) return "low";

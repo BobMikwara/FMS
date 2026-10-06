@@ -1,3 +1,5 @@
+import { hasOrganizationWideStationAccess, stationScopeForUser } from "@/server/auth/authorization";
+import { hasPermission } from "@/server/auth/session";
 import type { Station } from "@/server/domain/types";
 import { createStation, listStations } from "@/server/db/repo/stations";
 import { buildStationDetail } from "@/server/services/analytics";
@@ -22,27 +24,54 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
       page,
       pageSize,
       includeArchived: params.get("archived") === "true",
-      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      archivedOnly: params.get("archived") === "true",
+      stationIds: stationScopeForUser(ctx.user),
     }));
+    const canViewTanks = hasPermission(ctx.user, "tanks.view");
+    const canViewMovements = hasPermission(ctx.user, "movements.view");
+    const canViewAlerts = hasPermission(ctx.user, "alerts.view");
+    const canViewDevices = hasPermission(ctx.user, "devices.view");
     const rows = await Promise.all(result.rows.map(async (station) => {
       try {
         const detail = (await buildStationDetail(station.id, "today"));
+        const summary = detail
+          ? {
+              tankCount: canViewTanks ? detail.tanks.length : null,
+              totalFuel: canViewTanks ? Math.round(detail.totalFuel) : null,
+              capacity: canViewTanks ? Math.round(detail.capacity) : null,
+              utilizationPct: canViewTanks ? Number(detail.utilizationPct.toFixed(1)) : null,
+              todayConsumption: canViewMovements ? detail.todayConsumption : null,
+              todayRefills: canViewMovements ? detail.todayRefills : null,
+              activeAlerts: canViewAlerts ? detail.alerts.filter((alert) => alert.status === "active").length : null,
+              offlineDevices: canViewDevices ? detail.devices.filter((device) => device.status === "offline").length : null,
+              totalDevices: canViewDevices ? detail.devices.length : null,
+            }
+          : {
+              tankCount: null,
+              totalFuel: null,
+              capacity: null,
+              utilizationPct: null,
+              todayConsumption: null,
+              todayRefills: null,
+              activeAlerts: null,
+              offlineDevices: null,
+              totalDevices: null,
+            };
+        return { ...station, ...summary, summary: detail ? summary : null };
+      } catch {
         return {
           ...station,
-          summary: detail
-            ? {
-                tankCount: detail.tanks.length,
-                totalFuel: Math.round(detail.totalFuel),
-                capacity: Math.round(detail.capacity),
-                utilizationPct: Number(detail.utilizationPct.toFixed(1)),
-                todayConsumption: detail.todayConsumption,
-                todayRefills: detail.todayRefills,
-                activeAlerts: detail.alerts.filter((a) => a.status === "active").length,
-              }
-            : null,
+          tankCount: null,
+          totalFuel: null,
+          capacity: null,
+          utilizationPct: null,
+          todayConsumption: null,
+          todayRefills: null,
+          activeAlerts: null,
+          offlineDevices: null,
+          totalDevices: null,
+          summary: null,
         };
-      } catch {
-        return { ...station, summary: null };
       }
     }));
     return jsonOk({ rows, total: result.total, page, pageSize });
@@ -53,6 +82,9 @@ export const GET = withPermission("stations.view", async (request, ctx) => {
 
 export const POST = withPermission("stations.create", async (request, ctx) => {
   try {
+    if (!hasOrganizationWideStationAccess(ctx.user)) {
+      throw new ApiError(403, "Only organization-wide administrators can create stations.", "forbidden");
+    }
     const body = await parseJsonBody<Record<string, unknown>>(request);
     const name = maxLen(required(body.name, "Station name"), 120, "Station name");
     const code = maxLen(required(body.code, "Station code"), 32, "Station code");

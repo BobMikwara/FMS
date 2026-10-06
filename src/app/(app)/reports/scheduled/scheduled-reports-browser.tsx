@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { CalendarClock, Clock, Mail, Play, Pause, Trash2 } from "lucide-react";
+import { CalendarClock, Clock, Mail, Play, Pause } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Field, Input, Select, Switch, Textarea } from "@/components/ui/form";
 import { Badge } from "@/components/ui/feedback";
-import { ConfirmDialog, Modal } from "@/components/ui/overlay";
+import { Modal } from "@/components/ui/overlay";
 import { useToast } from "@/components/ui/feedback";
-import { formatDateTime, timeAgo } from "@/lib/utils";
+import { timeAgo } from "@/lib/utils";
+import { formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { REPORT_CATEGORIES } from "@/lib/report-categories";
 
 interface ScheduledRow {
@@ -26,12 +27,15 @@ interface ScheduledRow {
   isEnabled: boolean;
   lastRunAt: string | null;
   nextRunAt: string | null;
+  lastRunStatus?: "queued" | "running" | "ready" | "failed" | null;
+  lastRunError?: string | null;
+  lastRunDeliveries?: Record<string, number>;
 }
 
 const DAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 const FORMAT_OPTIONS = [
-  { value: "pdf", label: "PDF" },
+  { value: "pdf", label: "Print-ready HTML" },
   { value: "excel", label: "Excel" },
   { value: "csv", label: "CSV" },
 ];
@@ -45,20 +49,28 @@ function cadenceLabel(row: ScheduledRow): string {
   return `Day ${row.dayOfMonth ?? 1} of every month at ${row.timeOfDay}`;
 }
 
+function deliverySummary(counts: Record<string, number> = {}): string {
+  return ["delivered", "queued", "sending", "failed", "cancelled"]
+    .filter((status) => (counts[status] ?? 0) > 0)
+    .map((status) => `${counts[status]} ${status}`)
+    .join(", ");
+}
+
 export function ScheduledReportsBrowser({
   initialRows,
   stationOptions,
-  recipientOptions,
   allowAllStations,
+  operational = true,
+  canManage = false,
 }: {
   initialRows: ScheduledRow[];
   stationOptions: { id: string; name: string }[];
-  recipientOptions: string[];
   allowAllStations: boolean;
+  operational?: boolean;
+  canManage?: boolean;
 }) {
   const [rows, setRows] = useState<ScheduledRow[]>(initialRows);
   const [editTarget, setEditTarget] = useState<ScheduledRow | null>(null);
-  const [deleteId, setDeleteId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const toast = useToast();
@@ -176,7 +188,7 @@ export function ScheduledReportsBrowser({
       });
       const payload = await response.json();
       if (payload.ok) {
-        setRows((current) => current.map((entry) => (entry.id === row.id ? { ...entry, isEnabled: !row.isEnabled } : entry)));
+        setRows((current) => current.map((entry) => (entry.id === row.id ? payload.data as ScheduledRow : entry)));
         toast.success(row.isEnabled ? "Schedule paused" : "Schedule resumed", row.name);
       } else {
         toast.error(payload.error?.message ?? "Could not update the schedule.");
@@ -188,28 +200,6 @@ export function ScheduledReportsBrowser({
     }
   };
 
-  const remove = async () => {
-    const row = rows.find((entry) => entry.id === deleteId);
-    if (!row) return;
-    setBusy(true);
-    try {
-      const response = await fetch(`/api/scheduled-reports/${row.id}`, { method: "DELETE" });
-      const payload = await response.json();
-      if (payload.ok) {
-        setRows((current) => current.filter((entry) => entry.id !== row.id));
-        toast.success("Schedule deleted", row.name);
-        setDeleteId(null);
-      } else {
-        toast.error(payload.error?.message ?? "Could not delete the schedule.");
-      }
-    } catch {
-      toast.error("Could not reach the server. Please try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const target = rows.find((row) => row.id === deleteId) ?? null;
   const stationName = useMemo(
     () => new Map(stationOptions.map((station) => [station.id, station.name])),
     [stationOptions],
@@ -219,24 +209,32 @@ export function ScheduledReportsBrowser({
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-[0.8125rem] text-[var(--ink-2)]">
-          {rows.filter((row) => row.isEnabled).length} of {rows.length} schedules active.
+          {operational
+            ? `${rows.filter((row) => row.isEnabled).length} of ${rows.length} schedules active.`
+            : `${rows.length} saved definitions. Automatic execution is unavailable.`}
         </p>
-        <Button size="sm" onClick={openNew}>
-          Schedule a report
-        </Button>
+        {operational && canManage ? (
+          <Button size="sm" onClick={openNew}>
+            Schedule a report
+          </Button>
+        ) : null}
       </div>
 
       {rows.length === 0 ? (
         <div className="card p-8 text-center">
-          <p className="text-[0.875rem] font-medium text-[var(--ink)]">No schedules yet</p>
+          <p className="text-[0.875rem] font-medium text-[var(--ink)]">No saved schedule definitions</p>
           <p className="mx-auto mt-2 max-w-md text-[0.8125rem] leading-relaxed text-[var(--ink-2)]">
-            Create a schedule and the report will generate and deliver itself on the cadence you choose.
+            {operational
+              ? canManage ? "Create a schedule to generate reports on a recurring cadence." : "No scheduled reports are visible in your station scope."
+              : "Automatic report execution is not available."}
           </p>
-          <div className="mt-4">
-            <Button size="sm" onClick={openNew}>
-              Schedule a report
-            </Button>
-          </div>
+          {operational && canManage ? (
+            <div className="mt-4">
+              <Button size="sm" onClick={openNew}>
+                Schedule a report
+              </Button>
+            </div>
+          ) : null}
         </div>
       ) : (
         <ul className="grid gap-3 lg:grid-cols-2">
@@ -246,48 +244,57 @@ export function ScheduledReportsBrowser({
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="truncate text-[0.875rem] font-semibold text-[var(--ink)]">{row.name}</h3>
-                    <Badge tone={row.isEnabled ? "ok" : "neutral"}>{row.isEnabled ? "Active" : "Paused"}</Badge>
+                    <Badge tone={operational && row.isEnabled ? "ok" : "neutral"}>
+                      {operational ? (row.isEnabled ? "Active" : "Paused") : "Not running"}
+                    </Badge>
                   </div>
                   <p className="mt-1 flex flex-wrap items-center gap-1.5 text-[0.75rem] text-[var(--ink-3)]">
                     <Clock size={12} />
-                    {cadenceLabel(row)} · {row.timezone}
+                    Configured cadence: {cadenceLabel(row)} · {row.timezone}
                   </p>
                   <p className="mt-1 text-[0.75rem] text-[var(--ink-3)]">
                     {(REPORT_CATEGORIES.find((entry) => entry.value === row.category)?.label ?? row.category)} ·{" "}
-                    {row.format.toUpperCase()} ·{" "}
+                    {row.format === "pdf" ? "Print-ready HTML" : row.format.toUpperCase()} ·{" "}
                     {row.stationId ? stationName.get(row.stationId) ?? "Unknown station" : "All stations"}
                   </p>
-                  {row.recipients.length > 0 ? (
+                  {canManage ? row.recipients.length > 0 ? (
                     <p className="mt-1.5 flex items-center gap-1.5 text-[0.75rem] text-[var(--ink-2)]">
                       <Mail size={12} className="shrink-0 text-[var(--ink-3)]" />
-                      {row.recipients.join(", ")}
+                      Recipients: {row.recipients.join(", ")}
                     </p>
                   ) : (
-                    <p className="mt-1.5 text-[0.75rem] text-[var(--warn)]">No recipients - nothing will be delivered.</p>
-                  )}
+                    <p className="mt-1.5 text-[0.75rem] text-[var(--warn)]">No email recipients are configured.</p>
+                  ) : null}
                   <p className="mt-1.5 text-[0.6875rem] text-[var(--ink-3)]">
-                    {row.lastRunAt ? `Last run ${timeAgo(row.lastRunAt)}` : "Never run"}
-                    {row.nextRunAt && row.isEnabled ? ` · next ${formatDateTime(row.nextRunAt)}` : ""}
+                    {row.lastRunAt ? `Last run ${timeAgo(row.lastRunAt)}` : "No execution history"}
+                    {row.lastRunStatus ? ` · ${row.lastRunStatus}` : ""}
+                    {row.lastRunAt && row.lastRunDeliveries && deliverySummary(row.lastRunDeliveries)
+                      ? ` · email ${deliverySummary(row.lastRunDeliveries)}`
+                      : ""}
+                    {operational && row.nextRunAt && row.isEnabled
+                      ? ` · next ${formatDateTimeInTimeZone(row.nextRunAt, row.timezone)} (${row.timezone})`
+                      : operational ? "" : " · automatic execution unavailable"}
                   </p>
+                  {row.lastRunError ? (
+                    <p className="mt-1 text-[0.6875rem] text-[var(--crit)]">Last run error: {row.lastRunError}</p>
+                  ) : null}
                 </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    loading={busyId === row.id}
-                    onClick={() => toggle(row)}
-                  >
-                    {row.isEnabled ? <Pause size={14} /> : <Play size={14} />}
-                    {row.isEnabled ? "Pause" : "Resume"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
-                    Edit
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-                    <Trash2 size={14} />
-                    Delete
-                  </Button>
-                </div>
+                {operational && canManage ? (
+                  <div className="flex shrink-0 items-center gap-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      loading={busyId === row.id}
+                      onClick={() => toggle(row)}
+                    >
+                      {row.isEnabled ? <Pause size={14} /> : <Play size={14} />}
+                      {row.isEnabled ? "Pause" : "Resume"}
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
+                      Edit
+                    </Button>
+                  </div>
+                ) : null}
               </div>
             </li>
           ))}
@@ -298,7 +305,7 @@ export function ScheduledReportsBrowser({
         open={Boolean(editTarget)}
         onClose={() => setEditTarget(null)}
         title={editTarget?.id === "" ? "Schedule a report" : "Edit schedule"}
-        description="Reports generate automatically and are emailed to the recipients you list."
+        description="The scheduler creates a report for each due run and queues one email attachment per recipient."
         size="lg"
         footer={
           <>
@@ -349,7 +356,7 @@ export function ScheduledReportsBrowser({
               ]}
             />
           </Field>
-          <Field label="Time" htmlFor="schedule-time" required hint="Local time for the organization.">
+          <Field label="Time" htmlFor="schedule-time" required hint="Uses the selected station time zone, or the organization time zone for all-station schedules.">
             <Input
               id="schedule-time"
               type="time"
@@ -369,12 +376,12 @@ export function ScheduledReportsBrowser({
             </Field>
           ) : null}
           {form.period === "monthly" ? (
-            <Field label="Day of month" htmlFor="schedule-dom" required>
+            <Field label="Day of month" htmlFor="schedule-dom" required hint="Shorter months run on their final calendar day when needed.">
               <Input
                 id="schedule-dom"
                 type="number"
                 min={1}
-                max={28}
+                max={31}
                 value={form.dayOfMonth}
                 onChange={(event) => setForm({ ...form, dayOfMonth: Number(event.target.value) })}
               />
@@ -394,41 +401,19 @@ export function ScheduledReportsBrowser({
           <Field
             label="Recipients"
             htmlFor="schedule-recipients"
+            required
             className="sm:col-span-2"
-            hint="Comma-separated email addresses. Leave empty to generate without emailing."
+            hint="Add 1 to 10 comma-separated email addresses. Each recipient gets an attachment with its own delivery status."
           >
             <Textarea
               id="schedule-recipients"
+              required
               rows={2}
               value={form.recipients}
               onChange={(event) => setForm({ ...form, recipients: event.target.value })}
               placeholder="ops@puma.co.tz, finance@puma.co.tz"
             />
           </Field>
-          {recipientOptions.length > 0 ? (
-            <div className="sm:col-span-2">
-              <p className="mb-2 text-[0.75rem] text-[var(--ink-3)]">People in this organization:</p>
-              <div className="flex flex-wrap gap-1.5">
-                {recipientOptions.map((email) => (
-                  <button
-                    key={email}
-                    type="button"
-                    className="btn btn-ghost btn-sm"
-                    onClick={() =>
-                      setForm((current) => ({
-                        ...current,
-                        recipients: current.recipients.includes(email)
-                          ? current.recipients
-                          : [current.recipients, email].filter(Boolean).join(", "),
-                      }))
-                    }
-                  >
-                    {email}
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : null}
           <div className="sm:col-span-2">
             <Switch
               checked={form.isEnabled}
@@ -440,15 +425,6 @@ export function ScheduledReportsBrowser({
         </div>
       </Modal>
 
-      <ConfirmDialog
-        open={Boolean(target)}
-        onClose={() => setDeleteId(null)}
-        onConfirm={remove}
-        title="Delete this schedule?"
-        message={`${target?.name ?? "This schedule"} will stop generating reports. Reports it already produced are kept.`}
-        confirmLabel="Delete schedule"
-        loading={busy}
-      />
     </div>
   );
 }

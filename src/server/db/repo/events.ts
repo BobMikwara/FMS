@@ -1,4 +1,5 @@
 import { execute, id, query, queryOne } from "../client";
+import { localBucketKeyInTimeZone } from "../../services/time-zone";
 import { parseJson } from "./core";
 import type { FuelEvent } from "../../domain/types";
 
@@ -22,9 +23,12 @@ export interface EventFilter {
 export async function listEvents(filter: EventFilter): Promise<{ rows: FuelEvent[]; total: number }> {
   const where: string[] = ["e.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`e.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`e.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.stationId) {
     where.push("e.station_id = ?");
@@ -155,9 +159,6 @@ export async function createEvent(input: {
   return (await getEvent(eventId))!;
 }
 
-export async function deleteEvent(eventId: string): Promise<void> {
-  (await execute("DELETE FROM fuel_events WHERE id = ?", [eventId]));
-}
 
 export async function updateEvent(eventId: string, patch: Record<string, unknown>): Promise<FuelEvent | null> {
   const fields: string[] = [];
@@ -196,9 +197,12 @@ export async function movementTotals(
 ): Promise<MovementTotals> {
   const where: string[] = ["organization_id = ?", "ts >= ?", "ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
+      params.push(...stationIds);
+    }
   }
   if (stationId) {
     where.push("station_id = ?");
@@ -215,7 +219,7 @@ export async function movementTotals(
        COALESCE(SUM(CASE WHEN type = 'refill' THEN 1 ELSE 0 END), 0) AS refill_count,
        COALESCE(SUM(CASE WHEN type = 'consumption' THEN volume ELSE 0 END), 0) AS consumption,
        COALESCE(SUM(CASE WHEN type = 'consumption' THEN 1 ELSE 0 END), 0) AS consumption_count,
-       COALESCE(SUM(CASE WHEN type = 'anomaly' AND status = 'suspected' THEN volume ELSE 0 END), 0) AS suspected_loss,
+       COALESCE(SUM(CASE WHEN type = 'anomaly' AND status = 'suspected' AND level_after < level_before THEN volume ELSE 0 END), 0) AS suspected_loss,
        COALESCE(SUM(CASE WHEN type = 'anomaly' THEN 1 ELSE 0 END), 0) AS anomalies
      FROM fuel_events WHERE ${clause}`,
     params,
@@ -246,13 +250,16 @@ export async function movementSeries(
   stationId?: string,
   tankId?: string,
   stationIds?: string[],
+  timeZone = "UTC",
 ): Promise<BucketPoint[]> {
-  const fmt = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
   const where: string[] = ["organization_id = ?", "ts >= ?", "ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`station_id IN (${stationIds.map(() => "?").join(", ")})`);
+      params.push(...stationIds);
+    }
   }
   if (stationId) {
     where.push("station_id = ?");
@@ -263,15 +270,26 @@ export async function movementSeries(
     params.push(tankId);
   }
   const clause = where.join(" AND ");
-  return (await query<BucketPoint>(
-    `SELECT strftime('${fmt}', ts) AS bucket,
+  const hourly = await query<Omit<BucketPoint, "bucket"> & { bucket: string }>(
+    `SELECT strftime('%Y-%m-%dT%H:00', ts) AS bucket,
             COALESCE(SUM(CASE WHEN type = 'refill' THEN volume ELSE 0 END), 0) AS refills,
             COALESCE(SUM(CASE WHEN type = 'consumption' THEN volume ELSE 0 END), 0) AS consumption,
             COALESCE(SUM(CASE WHEN type = 'anomaly' THEN 1 ELSE 0 END), 0) AS anomalies
      FROM fuel_events WHERE ${clause}
      GROUP BY bucket ORDER BY bucket ASC`,
     params,
-  ));
+  );
+  const grouped = new Map<string, BucketPoint>();
+  for (const row of hourly) {
+    const bucketInstant = new Date(`${row.bucket}:00Z`);
+    const bucket = localBucketKeyInTimeZone(bucketInstant, granularity, timeZone);
+    const current = grouped.get(bucket) ?? { bucket, refills: 0, consumption: 0, anomalies: 0 };
+    current.refills += Number(row.refills ?? 0);
+    current.consumption += Number(row.consumption ?? 0);
+    current.anomalies += Number(row.anomalies ?? 0);
+    grouped.set(bucket, current);
+  }
+  return [...grouped.values()].sort((left, right) => left.bucket.localeCompare(right.bucket));
 }
 
 /** Bucketed average tank level — used for the fuel-level trend chart. */
@@ -283,13 +301,16 @@ export async function levelSeries(
   stationId?: string,
   tankId?: string,
   stationIds?: string[],
+  timeZone = "UTC",
 ): Promise<{ bucket: string; avgVolume: number; avgPercent: number }[]> {
-  const fmt = granularity === "hour" ? "%Y-%m-%dT%H:00" : "%Y-%m-%d";
   const where: string[] = ["r.organization_id = ?", "r.ts >= ?", "r.ts <= ?"];
   const params: unknown[] = [orgId, from, to];
-  if (stationIds && stationIds.length > 0) {
-    where.push(`r.tank_id IN (SELECT id FROM tanks WHERE station_id IN (${stationIds.map(() => "?").join(", ")}))`);
-    params.push(...stationIds);
+  if (stationIds !== undefined) {
+    if (stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`r.tank_id IN (SELECT id FROM tanks WHERE organization_id = ? AND station_id IN (${stationIds.map(() => "?").join(", ")}))`);
+      params.push(orgId, ...stationIds);
+    }
   }
   if (stationId) {
     where.push("r.tank_id IN (SELECT id FROM tanks WHERE station_id = ?)");
@@ -300,14 +321,40 @@ export async function levelSeries(
     params.push(tankId);
   }
   const clause = where.join(" AND ");
-  return (await query<{ bucket: string; avgVolume: number; avgPercent: number }>(
-    `SELECT strftime('${fmt}', r.ts) AS bucket,
-            AVG(r.volume_liters) AS avgVolume,
-            AVG(r.level_percent) AS avgPercent
+  const hourly = await query<{
+    bucket: string;
+    volumeTotal: number;
+    volumeCount: number;
+    percentTotal: number | null;
+    percentCount: number;
+  }>(
+    `SELECT strftime('%Y-%m-%dT%H:00', r.ts) AS bucket,
+            COALESCE(SUM(r.volume_liters), 0) AS volumeTotal,
+            COUNT(*) AS volumeCount,
+            SUM(r.level_percent) AS percentTotal,
+            COUNT(r.level_percent) AS percentCount
      FROM readings r WHERE ${clause}
      GROUP BY bucket ORDER BY bucket ASC`,
     params,
-  ));
+  );
+  const grouped = new Map<string, { volumeTotal: number; volumeCount: number; percentTotal: number; percentCount: number }>();
+  for (const row of hourly) {
+    const bucketInstant = new Date(`${row.bucket}:00Z`);
+    const bucket = localBucketKeyInTimeZone(bucketInstant, granularity, timeZone);
+    const current = grouped.get(bucket) ?? { volumeTotal: 0, volumeCount: 0, percentTotal: 0, percentCount: 0 };
+    current.volumeTotal += Number(row.volumeTotal ?? 0);
+    current.volumeCount += Number(row.volumeCount ?? 0);
+    current.percentTotal += Number(row.percentTotal ?? 0);
+    current.percentCount += Number(row.percentCount ?? 0);
+    grouped.set(bucket, current);
+  }
+  return [...grouped.entries()]
+    .map(([bucket, values]) => ({
+      bucket,
+      avgVolume: values.volumeCount > 0 ? values.volumeTotal / values.volumeCount : 0,
+      avgPercent: values.percentCount > 0 ? values.percentTotal / values.percentCount : 0,
+    }))
+    .sort((left, right) => left.bucket.localeCompare(right.bucket));
 }
 
 function mapEvent(row: Record<string, unknown>): FuelEvent {

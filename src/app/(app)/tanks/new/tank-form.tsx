@@ -6,6 +6,7 @@ import { Field, Input, Select, Textarea } from "@/components/ui/form";
 import { Button } from "@/components/ui/button";
 import { Notice, PageHeader } from "@/components/ui/layout";
 import { useToast } from "@/components/ui/feedback";
+import { validateTankThresholds } from "@/lib/tank-thresholds";
 
 interface FuelTypeOption {
   id: string;
@@ -55,18 +56,12 @@ export function TankForm({ stations, fuelTypes }: { stations: StationOption[]; f
     } else if (capacity > 5_000_000) {
       errors.capacity = "That capacity looks implausibly large. Please check the value.";
     }
-    const low = Number(form.lowThresholdPct);
-    const critical = Number(form.criticalThresholdPct);
-    const overfill = Number(form.overfillThresholdPct);
-    if (!Number.isFinite(low) || low < 1 || low > 100) errors.lowThresholdPct = "Use a percentage between 1 and 100.";
-    if (!Number.isFinite(critical) || critical < 1 || critical > 100) {
-      errors.criticalThresholdPct = "Use a percentage between 1 and 100.";
-    } else if (Number.isFinite(low) && critical >= low) {
-      errors.criticalThresholdPct = "The critical threshold must be below the low threshold.";
-    }
-    if (!Number.isFinite(overfill) || overfill < 50 || overfill > 100) {
-      errors.overfillThresholdPct = "Use a percentage between 50 and 100.";
-    }
+    const thresholdValidation = validateTankThresholds({
+      criticalThresholdPct: Number(form.criticalThresholdPct),
+      lowThresholdPct: Number(form.lowThresholdPct),
+      overfillThresholdPct: Number(form.overfillThresholdPct),
+    });
+    Object.assign(errors, thresholdValidation.errors);
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -237,8 +232,9 @@ export function TankForm({ stations, fuelTypes }: { stations: StationOption[]; f
       <section className="card p-5">
         <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Alert thresholds</h2>
         <p className="mt-1 text-[0.75rem] leading-relaxed text-[var(--ink-3)]">
-          Thresholds are evaluated against measured volume divided by usable capacity. Full is 85–100%, normal is 30–84%,
-          low is 15–29% and critical is below the value you set here.
+          Status is based on measured volume divided by usable capacity. Critical is below the critical threshold, low is
+          from critical up to low, normal is from low up to overfill, and full begins at the overfill threshold. Keep
+          critical below low and low below overfill.
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           <Field label="Low threshold (%)" htmlFor="low" required error={fieldErrors.lowThresholdPct}>

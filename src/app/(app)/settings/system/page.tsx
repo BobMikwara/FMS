@@ -6,6 +6,7 @@ import { countReadings } from "@/server/db/repo/readings";
 import { countDevices } from "@/server/db/repo/devices";
 import { countTanks } from "@/server/db/repo/stations";
 import { listAllStations } from "@/server/db/repo/stations";
+import { resolveOperatorSettings } from "@/server/domain/system-config";
 import { listAllVehicles } from "@/server/db/repo/devices";
 import { PageHeader, Notice } from "@/components/ui/layout";
 import { Badge } from "@/components/ui/feedback";
@@ -17,7 +18,6 @@ const ENV_KEYS = [
   { key: "DATABASE_URL", label: "Database", hint: "SQLite file path or PostgreSQL connection string" },
   { key: "AUTH_SECRET", label: "Auth secret", hint: "Signs session JWTs - must be long and random" },
   { key: "AUTH_URL", label: "Auth URL", hint: "Public origin used in password reset links" },
-  { key: "REALTIME_TRANSPORT", label: "Realtime transport", hint: "sse or polling" },
   { key: "DEMO_SIMULATOR", label: "Demo simulator", hint: "on permits explicit local/demo simulator runs" },
   { key: "RATE_LIMIT_MAX", label: "Rate limit", hint: "Requests per window per client" },
   { key: "SMTP_HOST", label: "SMTP host", hint: "Required before password reset emails can be sent" },
@@ -29,7 +29,7 @@ export default async function SystemSettingsPage() {
   if (!user) redirect("/login");
 
   const settings = (await getSettings(user.organizationId));
-  const system = (settings.system ?? {}) as Record<string, unknown>;
+  const system = resolveOperatorSettings(settings);
 
   const org = user.organizationId;
   const stations = (await listAllStations(org)).length;
@@ -77,13 +77,11 @@ export default async function SystemSettingsPage() {
 
       <SystemSettingsForm
         initial={{
-          retentionDays: typeof system.retentionDays === "number" ? system.retentionDays : 365,
-          readingIntervalSec: typeof system.readingIntervalSec === "number" ? system.readingIntervalSec : 60,
-          offlineTimeoutMin: typeof system.offlineTimeoutMin === "number" ? system.offlineTimeoutMin : 15,
-          reconciliationVariancePct:
-            typeof system.reconciliationVariancePct === "number" ? system.reconciliationVariancePct : 1,
+          retentionDays: system.retentionDays,
+          readingIntervalSec: system.readingIntervalSec,
+          offlineTimeoutMin: system.offlineTimeoutMin,
+          reconciliationVariancePct: system.reconciliationVariancePct,
           simulatorEnabled: process.env.DEMO_SIMULATOR === "on",
-          realtimeTransport: process.env.REALTIME_TRANSPORT ?? "sse",
           rateLimitMax: Number(process.env.RATE_LIMIT_MAX ?? 240),
         }}
       />
@@ -119,8 +117,8 @@ export default async function SystemSettingsPage() {
       <section className="card p-5">
         <h2 className="text-[0.9375rem] font-semibold tracking-tight text-[var(--ink)]">Fleet</h2>
         <p className="mt-2 text-[0.8125rem] text-[var(--ink-2)]">
-          {vehicles} vehicle{vehicles === 1 ? "" : "s"} tracked with GPS. Vehicle positions arrive through the same device
-          ingest endpoint as probe readings, so a tracker and a probe share one authentication and normalization path.
+          {vehicles} vehicle{vehicles === 1 ? "" : "s"} in the fleet registry. Live GPS positions are not available until
+          vehicle telemetry is stored; a vehicle's assigned home station is a static reference, not a tracker location.
         </p>
       </section>
     </div>

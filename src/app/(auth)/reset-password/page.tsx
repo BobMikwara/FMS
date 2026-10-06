@@ -1,31 +1,15 @@
-import { Suspense } from "react";
 import { ResetPasswordForm } from "./reset-password-form";
 
-export const metadata = { title: "Choose a new password" };
+export const metadata = { title: "Set your SmartFuel password" };
 
-export default function ResetPasswordPage() {
-  return (
-    // `useSearchParams` in the child requires a suspense boundary during prerender.
-    <Suspense fallback={<ResetFallback />}>
-      <ResetPasswordForm token={readToken()} />
-    </Suspense>
-  );
-}
+type ResetPasswordPageProps = {
+  searchParams: Promise<{ token?: string | string[]; mode?: string | string[] }>;
+};
 
-/** Reads the reset token from the query string on the client. */
-function readToken(): string {
-  if (typeof window === "undefined") return "";
-  return new URLSearchParams(window.location.search).get("token") ?? "";
-}
-
-function ResetFallback() {
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-[var(--canvas)] px-5 py-10">
-      <div className="w-full max-w-[26rem] space-y-5">
-        <div className="skeleton h-9 w-32 rounded-xl" />
-        <div className="skeleton h-8 w-64 rounded-lg" />
-        <div className="skeleton h-24 w-full rounded-xl" />
-      </div>
-    </div>
-  );
+export default async function ResetPasswordPage({ searchParams }: ResetPasswordPageProps) {
+  const params = await searchParams;
+  const token = Array.isArray(params.token) ? params.token[0] ?? "" : params.token ?? "";
+  const rawMode = Array.isArray(params.mode) ? params.mode[0] : params.mode;
+  const mode = rawMode === "activate" ? "activate" : "reset";
+  return <ResetPasswordForm token={token} mode={mode} />;
 }

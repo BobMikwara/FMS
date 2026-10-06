@@ -31,11 +31,14 @@ interface RuleRow {
 const TYPE_LABELS: Record<string, string> = {
   critical_fuel: "Critical fuel level",
   low_fuel: "Low fuel level",
+  invalid_reading: "Invalid telemetry reading",
+  temperature_abnormal: "Temperature abnormality",
   high_fuel: "High fuel level",
   overfill: "Overfill risk",
   water_detected: "Water detected",
   high_temperature: "High temperature",
   probe_offline: "Probe offline",
+  gps_offline: "GPS device offline",
   refill: "Refill detected",
   unexpected_refuel: "Unexpected refuel",
   suspected_loss: "Suspected loss",
@@ -44,7 +47,7 @@ const TYPE_LABELS: Record<string, string> = {
   rapid_change: "Rapid level change",
 };
 
-export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
+export function RulesBrowser({ initialRows, canManage }: { initialRows: RuleRow[]; canManage: boolean }) {
   const query = useResourceQuery<RuleRow>({
     endpoint: "/api/alert-rules",
     initial: { rows: initialRows, total: initialRows.length, page: 1, pageSize: 25 },
@@ -83,11 +86,11 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
       const response = await fetch(`/api/alert-rules/${target.id}`, { method: "DELETE" });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("Rule deleted", target.name);
+        toast.success("Rule disabled", target.name);
         setDeleteId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not delete the rule.");
+        toast.error(payload.error?.message ?? "Could not disable the rule.");
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -157,6 +160,7 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
             <Switch
               checked={row.isEnabled}
               onChange={(value) => toggle(row, value)}
+              disabled={!canManage}
               label=""
               size="sm"
               id={`rule-enabled-${row.id}`}
@@ -167,17 +171,17 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
       {
         key: "actions",
         header: "",
-        cell: (row) => (
+        cell: (row) => canManage ? (
           <div className="flex items-center justify-end">
-            <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-              Delete
+            <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)} disabled={!row.isEnabled}>
+              Disable
             </Button>
           </div>
-        ),
+        ) : null,
       },
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [canManage],
   );
 
   return (
@@ -199,9 +203,11 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
           ]}
         />
         <div className="flex-1" />
-        <Link href="/alerts/rules/new" className="btn btn-primary btn-sm">
-          Create rule
-        </Link>
+        {canManage ? (
+          <Link href="/alerts/rules/new" className="btn btn-primary btn-sm">
+            Create rule
+          </Link>
+        ) : null}
       </div>
 
       {rows.length === 0 && !query.loading ? (
@@ -209,11 +215,11 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
           icon="sliders"
           title="No alert rules configured"
           description="Rules decide when the platform raises an alert. Create your first rule to start being notified about threshold breaches."
-          action={
+          action={canManage ? (
             <Link href="/alerts/rules/new" className="btn btn-primary btn-sm">
               Create rule
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -237,9 +243,9 @@ export function RulesBrowser({ initialRows }: { initialRows: RuleRow[] }) {
         open={Boolean(target)}
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
-        title="Delete this rule?"
-        message={`${target?.name ?? "This rule"} will stop raising alerts immediately. Existing alerts are unaffected.`}
-        confirmLabel="Delete rule"
+        title="Disable this rule?"
+        message={`${target?.name ?? "This rule"} will stop raising new alerts. Existing alerts and rule history will be preserved.`}
+        confirmLabel="Disable rule"
         loading={busy}
       />
     </div>

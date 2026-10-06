@@ -24,6 +24,7 @@ interface TankRow {
   currentVolume: number;
   levelPercent: number;
   status: "full" | "normal" | "low" | "critical" | "offline";
+  isArchived: boolean;
   tankType: "underground" | "above_ground";
   lowThresholdPct: number;
   criticalThresholdPct: number;
@@ -44,10 +45,14 @@ export function TanksBrowser({
   initialRows,
   stations,
   fuelTypes,
+  canCreate,
+  canArchive,
 }: {
   initialRows: TankRow[];
   stations: { id: string; name: string }[];
   fuelTypes: { id: string; name: string; color: string; systemName: string }[];
+  canCreate: boolean;
+  canArchive: boolean;
 }) {
   const query = useResourceQuery<TankRow>({
     endpoint: "/api/tanks",
@@ -65,22 +70,23 @@ export function TanksBrowser({
     [fuelTypes],
   );
 
-  const archive = async () => {
+  const updateArchiveState = async () => {
     if (!target) return;
+    const restoring = target.isArchived;
     setBusy(true);
     try {
       const response = await fetch(`/api/tanks/${target.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ isArchived: true }),
+        body: JSON.stringify({ isArchived: !restoring }),
       });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("Tank archived", `${target.name} is hidden from active views.`);
+        toast.success(restoring ? "Tank restored" : "Tank archived", target.name);
         setArchiveId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not archive the tank.");
+        toast.error(payload.error?.message ?? (restoring ? "Could not restore the tank." : "Could not archive the tank."));
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -116,6 +122,9 @@ export function TanksBrowser({
               color={fuelColors[row.fuelTypeId] ?? FUEL_COLOR_FALLBACK[row.fuelTypeId] ?? "#0f766e"}
               volume={row.currentVolume}
               capacity={row.capacity}
+              lowThresholdPct={row.lowThresholdPct}
+              criticalThresholdPct={row.criticalThresholdPct}
+              overfillThresholdPct={row.overfillThresholdPct}
               size="sm"
               showHeader={false}
               status={row.status}
@@ -163,7 +172,7 @@ export function TanksBrowser({
         hideOnMobile: true,
         cell: (row) => (
           <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
-            Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}%
+            Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}% · Overfill {row.overfillThresholdPct}%
           </span>
         ),
       },
@@ -175,14 +184,16 @@ export function TanksBrowser({
             <Link href={`/tanks/${row.id}`} className="btn btn-ghost btn-sm">
               Details
             </Link>
-            <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
-              Archive
-            </Button>
+            {canArchive ? (
+              <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
+                {row.isArchived ? "Restore" : "Archive"}
+              </Button>
+            ) : null}
           </div>
         ),
       },
     ],
-    [],
+    [canArchive],
   );
 
   return (
@@ -190,6 +201,16 @@ export function TanksBrowser({
       {query.error ? <LoadError message={query.error} onRetry={query.refresh} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label="Filter active or archived tanks"
+          className="w-44"
+          value={query.filters.archived ?? ""}
+          onChange={(event) => query.setFilter("archived", event.target.value)}
+          options={[
+            { value: "", label: "Active tanks" },
+            { value: "true", label: "Archived tanks" },
+          ]}
+        />
         <Select
           aria-label="Filter by status"
           className="w-40"
@@ -232,6 +253,7 @@ export function TanksBrowser({
             { header: "Water (mm)", value: (row) => row.waterLevelMm ?? "" },
             { header: "Low threshold (%)", value: (row) => row.lowThresholdPct },
             { header: "Critical threshold (%)", value: (row) => row.criticalThresholdPct },
+            { header: "Overfill threshold (%)", value: (row) => row.overfillThresholdPct },
             { header: "Last reading", value: (row) => row.lastReadingAt ?? "" },
           ]}
         />
@@ -242,11 +264,11 @@ export function TanksBrowser({
           icon="tank"
           title="No tanks have been added yet"
           description="Tanks hold the probe readings that drive every metric in the platform. Add your first tank to begin monitoring."
-          action={
+          action={canCreate ? (
             <Link href="/tanks/new" className="btn btn-primary btn-sm">
               Add tank
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -266,21 +288,23 @@ export function TanksBrowser({
           searchPlaceholder="Search tanks by name, code or station…"
           emptyTitle="No tanks have been added yet"
           emptyDescription="Add a tank to begin collecting readings."
-          emptyAction={
+          emptyAction={canCreate ? (
             <Link href="/tanks/new" className="btn btn-primary btn-sm">
               Add tank
             </Link>
-          }
+          ) : undefined}
         />
       )}
 
       <ConfirmDialog
         open={Boolean(target)}
         onClose={() => setArchiveId(null)}
-        onConfirm={archive}
-        title="Archive this tank?"
-        message={`${target?.name ?? "This tank"} will be hidden from active views. Its reading history, movements and alerts are preserved.`}
-        confirmLabel="Archive tank"
+        onConfirm={updateArchiveState}
+        title={target?.isArchived ? "Restore this tank?" : "Archive this tank?"}
+        message={target?.isArchived
+          ? `${target.name} will return to active views. Its reading history, movements and alerts remain intact.`
+          : `${target?.name ?? "This tank"} will be hidden from active views. Its reading history, movements and alerts are preserved.`}
+        confirmLabel={target?.isArchived ? "Restore tank" : "Archive tank"}
         loading={busy}
       />
     </div>

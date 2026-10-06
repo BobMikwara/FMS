@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
+import { hasOrganizationWideStationAccess } from "@/server/auth/authorization";
 import { hasPermission, type SessionUser } from "@/server/auth/permissions";
 import { Icon, type IconName } from "./icons";
 import { Kbd } from "@/components/ui/feedback";
@@ -60,7 +61,10 @@ export function CommandPalette({ open, onClose, user }: { open: boolean; onClose
   const [hits, setHits] = useState<EntityHit[]>([]);
 
   const commands = useMemo(
-    () => COMMANDS.filter((command) => !command.permission || hasPermission(user, command.permission)),
+    () => COMMANDS.filter((command) =>
+      (!command.permission || hasPermission(user, command.permission)) &&
+      (command.id !== "act-station" || hasOrganizationWideStationAccess(user)),
+    ),
     [user],
   );
 

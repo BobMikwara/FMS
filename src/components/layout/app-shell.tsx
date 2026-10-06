@@ -297,7 +297,7 @@ export function AppShell({ user, alertCount, unreadNotifications, children }: Ap
               <Icon name={resolved === "dark" ? "sun" : "moon"} className="h-4 w-4" />
             </IconButton>
 
-            <NotificationCenter unreadCount={unreadNotifications} />
+            {hasPermission(user, "notifications.view") ? <NotificationCenter unreadCount={unreadNotifications} /> : null}
 
             <Dropdown
               items={[

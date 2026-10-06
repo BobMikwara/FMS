@@ -122,11 +122,11 @@ export function FuelTypesBrowser({ initialRows }: { initialRows: FuelTypeRow[] }
       const response = await fetch(`/api/fuel-types/${row.id}`, { method: "DELETE" });
       const payload = await response.json();
       if (payload.ok) {
-        setRows((current) => current.filter((entry) => entry.id !== row.id));
-        toast.success("Fuel type deleted", row.displayName);
+        setRows((current) => current.map((entry) => entry.id === row.id ? { ...entry, isActive: false } : entry));
+        toast.success("Fuel type deactivated", row.displayName);
         setDeleteId(null);
       } else {
-        toast.error(payload.error?.message ?? "Could not delete the fuel type.");
+        toast.error(payload.error?.message ?? "Could not deactivate the fuel type.");
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -197,8 +197,8 @@ export function FuelTypesBrowser({ initialRows }: { initialRows: FuelTypeRow[] }
                 <Button size="sm" variant="ghost" onClick={() => openEdit(row)}>
                   Edit
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)}>
-                  Delete
+                <Button size="sm" variant="ghost" onClick={() => setDeleteId(row.id)} disabled={!row.isActive}>
+                  Deactivate
                 </Button>
               </div>
             </li>
@@ -286,9 +286,9 @@ export function FuelTypesBrowser({ initialRows }: { initialRows: FuelTypeRow[] }
         open={Boolean(target)}
         onClose={() => setDeleteId(null)}
         onConfirm={remove}
-        title="Delete this fuel type?"
-        message={`${target?.displayName ?? "This fuel type"} will be removed. Tanks using it must be reassigned first.`}
-        confirmLabel="Delete fuel type"
+        title="Deactivate this fuel type?"
+        message={`${target?.displayName ?? "This fuel type"} will no longer be available for new assignments. Existing tanks and historical reports will retain this fuel type.`}
+        confirmLabel="Deactivate fuel type"
         loading={busy}
       />
     </div>

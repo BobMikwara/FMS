@@ -1,3 +1,5 @@
+import { stationScopeForUser } from "@/server/auth/authorization";
+import { telemetryFreshness } from "@/server/domain/device-freshness";
 import Link from "next/link";
 import { getCurrentUser } from "@/server/auth/session";
 import { buildDashboard } from "@/server/services/analytics";
@@ -7,7 +9,8 @@ import { deviceStatusLabel, deviceStatusTone, stationStatusTone, stationStatusLa
 import { AreaChart, BarChart, ComparisonBars, type Series } from "@/components/charts/charts";
 import { TankBar } from "@/components/charts/tank-visual";
 import { Icon } from "@/components/layout/icons";
-import { cn, formatDateTime, formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { cn, formatNumber, formatPercent, timeAgo } from "@/lib/utils";
+import { datePartsInTimeZone, formatDateTimeInTimeZone } from "@/server/services/time-zone";
 import { EventTypeBadge, StationStatusBadge, StatusBadge } from "@/components/domain/badges";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +19,17 @@ export default async function DashboardPage() {
   const user = await getCurrentUser();
   if (!user) return null;
 
-  const data = (await buildDashboard(user.organizationId, "7d", user.stationIds));
+  const data = (await buildDashboard(user.organizationId, "7d", stationScopeForUser(user)));
   const { kpis, charts, alerts, recentMovements, lowTanks, deviceHealth, stations } = data;
+  const freshness = telemetryFreshness(data.telemetry.latestValidAt, {
+    liveWithinSeconds: data.telemetry.liveWithinSeconds,
+    staleAfterSeconds: data.telemetry.staleAfterSeconds,
+  });
+  const latestTelemetryAge = data.telemetry.latestValidAt
+    ? timeAgo(data.telemetry.latestValidAt)
+    : "No valid telemetry yet";
 
-  const greeting = greetingForHour(new Date().getHours());
+  const greeting = greetingForHour(datePartsInTimeZone(new Date(), data.timeZone).hour);
   const firstName = user.name.split(" ")[0] ?? user.name;
   // Kept in step with the read-model's window so a KPI label can never claim a
   // period the number was not calculated over.
@@ -29,11 +39,16 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <PageHeader
         title={`${greeting}, ${firstName}`}
-        description={`${data.orgName} · live fuel inventory across ${kpis.totalStations} stations and ${kpis.totalTanks} tanks. Values below come directly from device readings - nothing here is estimated.`}
+        description={`${data.orgName} · measured fuel inventory across ${kpis.totalStations} stations and ${kpis.totalTanks} tanks. Business-day totals and chart buckets use ${data.timeZone}. Values come from stored readings; the indicator reports the age of the latest valid telemetry.`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <LiveIndicator state="live" ageLabel={timeAgo(data.generatedAt)} />
-            <span className="hidden text-[0.75rem] text-[var(--ink-3)] sm:inline">{formatDateTime(data.generatedAt)}</span>
+            <LiveIndicator state={freshness} ageLabel={latestTelemetryAge} />
+            <span
+              className="hidden text-[0.75rem] text-[var(--ink-3)] sm:inline"
+              title="Page data-load time, not the time of the latest device reading."
+            >
+              Loaded {formatDateTimeInTimeZone(data.generatedAt, data.timeZone)} ({data.timeZone})
+            </span>
             <Link href="/reports/new" className="btn btn-secondary btn-sm">
               <Icon name="report" className="h-3.5 w-3.5" />
               New report

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { formatNumber, formatPercent } from "@/lib/utils";
 import { DataTable, type Column } from "@/components/ui/data-table";
-import { EmptyState } from "@/components/ui/feedback";
+import { Badge, EmptyState } from "@/components/ui/feedback";
 import { TankStatusBadge } from "@/components/domain/badges";
 import { TankVisual } from "@/components/charts/tank-visual";
 import { LoadError } from "@/components/domain/resource-query";
@@ -21,10 +21,20 @@ interface TankRow {
   lastReadingAt: string | null;
   lowThresholdPct: number;
   criticalThresholdPct: number;
+  overfillThresholdPct: number;
   tankType: string;
+  isArchived: boolean;
 }
 
-export function StationTanks({ stationId }: { stationId: string }) {
+export function StationTanks({
+  stationId,
+  canCreate,
+  includeArchived = false,
+}: {
+  stationId: string;
+  canCreate: boolean;
+  includeArchived?: boolean;
+}) {
   const [rows, setRows] = useState<TankRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,7 +42,9 @@ export function StationTanks({ stationId }: { stationId: string }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/tanks?stationId=${stationId}&pageSize=50`)
+    const params = new URLSearchParams({ stationId, pageSize: "50" });
+    if (includeArchived) params.set("includeArchived", "true");
+    fetch(`/api/tanks?${params.toString()}`)
       .then(async (response) => {
         const payload = await response.json();
         if (cancelled) return;
@@ -52,7 +64,7 @@ export function StationTanks({ stationId }: { stationId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [stationId]);
+  }, [includeArchived, stationId]);
 
   const columns: Column<TankRow>[] = [
     {
@@ -63,8 +75,9 @@ export function StationTanks({ stationId }: { stationId: string }) {
           <Link href={`/tanks/${row.id}`} className="block truncate text-[0.8125rem] font-medium text-[var(--ink)] hover:underline">
             {row.name}
           </Link>
-          <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">
+          <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[0.75rem] text-[var(--ink-3)]">
             {row.code} · {row.fuelType}
+            {row.isArchived ? <Badge tone="neutral">Archived tank</Badge> : null}
           </p>
         </div>
       ),
@@ -80,6 +93,9 @@ export function StationTanks({ stationId }: { stationId: string }) {
             color={row.color}
             volume={row.currentVolume}
             capacity={row.capacity}
+            lowThresholdPct={row.lowThresholdPct}
+            criticalThresholdPct={row.criticalThresholdPct}
+            overfillThresholdPct={row.overfillThresholdPct}
             size="sm"
             showHeader={false}
             status={row.status}
@@ -103,7 +119,7 @@ export function StationTanks({ stationId }: { stationId: string }) {
       hideOnMobile: true,
       cell: (row) => (
         <span className="text-num text-[0.75rem] text-[var(--ink-2)]">
-          {row.lowThresholdPct}% / {row.criticalThresholdPct}%
+          Low {row.lowThresholdPct}% · Critical {row.criticalThresholdPct}% · Overfill {row.overfillThresholdPct}%
         </span>
       ),
     },
@@ -127,9 +143,11 @@ export function StationTanks({ stationId }: { stationId: string }) {
           <h2 className="text-[0.8125rem] font-semibold text-[var(--ink)]">Tanks at this station</h2>
           <p className="mt-0.5 text-[0.75rem] text-[var(--ink-3)]">Measured volume, status and configured thresholds for each tank.</p>
         </div>
-        <Link href="/tanks/new" className="btn btn-secondary btn-sm">
-          Add tank
-        </Link>
+        {canCreate ? (
+          <Link href="/tanks/new" className="btn btn-secondary btn-sm">
+            Add tank
+          </Link>
+        ) : null}
       </div>
       {error ? (
         <div className="p-5">
@@ -140,11 +158,11 @@ export function StationTanks({ stationId }: { stationId: string }) {
           icon="tank"
           title="No tanks have been added yet"
           description="Tanks hold the probe readings that drive every metric on this page. Add the first tank to start monitoring."
-          action={
+          action={canCreate ? (
             <Link href="/tanks/new" className="btn btn-primary btn-sm">
               Add tank
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable

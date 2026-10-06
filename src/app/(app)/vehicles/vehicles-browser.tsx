@@ -30,13 +30,26 @@ interface VehicleRow {
   tankCapacity: number | null;
   stationId: string | null;
   status: "active" | "maintenance" | "inactive";
+  isArchived: boolean;
   odometerKm: number | null;
   driverName: string | null;
   driverPhone: string | null;
   tracker: Tracker | null;
 }
 
-export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) {
+export function VehiclesBrowser({
+  initialRows,
+  canCreate,
+  canEdit,
+  canArchive,
+  canViewDevices,
+}: {
+  initialRows: VehicleRow[];
+  canCreate: boolean;
+  canEdit: boolean;
+  canArchive: boolean;
+  canViewDevices: boolean;
+}) {
   const query = useResourceQuery<VehicleRow>({
     endpoint: "/api/vehicles",
     initial: { rows: initialRows, total: initialRows.length, page: 1, pageSize: 25 },
@@ -49,22 +62,23 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
   const rows = query.rows as VehicleRow[];
   const target = rows.find((row) => row.id === archiveId) ?? null;
 
-  const archive = async () => {
+  const updateArchiveState = async () => {
     if (!target) return;
+    const restoring = target.isArchived;
     setBusy(true);
     try {
       const response = await fetch(`/api/vehicles/${target.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ isArchived: true }),
+        body: JSON.stringify({ isArchived: !restoring }),
       });
       const payload = await response.json();
       if (payload.ok) {
-        toast.success("Vehicle archived", `${target.plateNumber} is hidden from active views.`);
+        toast.success(restoring ? "Vehicle restored" : "Vehicle archived", `${target.plateNumber}`);
         setArchiveId(null);
         query.refresh();
       } else {
-        toast.error(payload.error?.message ?? "Could not archive the vehicle.");
+        toast.error(payload.error?.message ?? (restoring ? "Could not restore the vehicle." : "Could not archive the vehicle."));
       }
     } catch {
       toast.error("Could not reach the server. Please try again.");
@@ -137,20 +151,31 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
         header: "",
         cell: (row) => (
           <div className="flex items-center justify-end gap-1">
-            <Link href={`/vehicles/${row.id}/edit`} className="btn btn-ghost btn-sm">
-              Edit
-            </Link>
-            <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
-              Tracker
-            </Link>
-            <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
-              Archive
-            </Button>
+            {canEdit ? (
+              <Link href={`/vehicles/${row.id}/edit`} className="btn btn-ghost btn-sm">
+                Edit
+              </Link>
+            ) : null}
+            {canViewDevices ? (
+              <>
+                <Link href={`/vehicles/${row.id}`} className="btn btn-ghost btn-sm">
+                  Position history
+                </Link>
+                <Link href="/devices?type=gps_tracker" className="btn btn-ghost btn-sm">
+                  Tracker
+                </Link>
+              </>
+            ) : null}
+            {canArchive ? (
+              <Button size="sm" variant="ghost" onClick={() => setArchiveId(row.id)}>
+                {row.isArchived ? "Restore" : "Archive"}
+              </Button>
+            ) : null}
           </div>
         ),
       },
     ],
-    [],
+    [canArchive, canEdit, canViewDevices],
   );
 
   return (
@@ -158,6 +183,16 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
       {query.error ? <LoadError message={query.error} onRetry={query.refresh} /> : null}
 
       <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label="Filter active or archived vehicles"
+          className="w-44"
+          value={query.filters.archived ?? ""}
+          onChange={(event) => query.setFilter("archived", event.target.value)}
+          options={[
+            { value: "", label: "Active vehicles" },
+            { value: "true", label: "Archived vehicles" },
+          ]}
+        />
         <Select
           aria-label="Filter by status"
           className="w-40"
@@ -197,11 +232,11 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
           icon="vehicle"
           title="No vehicles have been added yet"
           description="Vehicles move fuel between your sites. Add a vehicle and pair a GPS tracker to reconcile deliveries."
-          action={
+          action={canCreate ? (
             <Link href="/vehicles/new" className="btn btn-primary btn-sm">
               Add vehicle
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <DataTable
@@ -221,21 +256,23 @@ export function VehiclesBrowser({ initialRows }: { initialRows: VehicleRow[] }) 
           searchPlaceholder="Search vehicles by name, plate or driver…"
           emptyTitle="No vehicles have been added yet"
           emptyDescription="Add a vehicle to start tracking fuel movements."
-          emptyAction={
+          emptyAction={canCreate ? (
             <Link href="/vehicles/new" className="btn btn-primary btn-sm">
               Add vehicle
             </Link>
-          }
+          ) : undefined}
         />
       )}
 
       <ConfirmDialog
         open={Boolean(target)}
         onClose={() => setArchiveId(null)}
-        onConfirm={archive}
-        title="Archive this vehicle?"
-        message={`${target?.plateNumber ?? "This vehicle"} will be hidden from active views. Its movement history is preserved.`}
-        confirmLabel="Archive vehicle"
+        onConfirm={updateArchiveState}
+        title={target?.isArchived ? "Restore this vehicle?" : "Archive this vehicle?"}
+        message={target?.isArchived
+          ? `${target.plateNumber} will return to active views. Its movement history remains intact.`
+          : `${target?.plateNumber ?? "This vehicle"} will be hidden from active views. Its movement history is preserved.`}
+        confirmLabel={target?.isArchived ? "Restore vehicle" : "Archive vehicle"}
         loading={busy}
       />
     </div>

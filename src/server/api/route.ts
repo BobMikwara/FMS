@@ -3,6 +3,7 @@ import type { SessionUser } from "../auth/session";
 import { getCurrentUser, hasPermission } from "../auth/session";
 import { queryOne } from "../db/client";
 import { createAuditLog } from "../db/repo/core";
+export { stationScopeForUser, userCanAccessStation } from "../auth/authorization";
 
 /**
  * Shared API plumbing: consistent response envelopes, validation, auth,

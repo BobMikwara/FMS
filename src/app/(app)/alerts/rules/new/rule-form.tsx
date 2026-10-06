@@ -19,11 +19,15 @@ export function RuleForm({
   tanks,
   stations,
   fuelTypes,
+  devices,
+  allowOrganizationScope,
 }: {
   ruleTypes: RuleType[];
   tanks: { id: string; name: string }[];
   stations: { id: string; name: string }[];
   fuelTypes: { id: string; name: string }[];
+  devices: { id: string; name: string }[];
+  allowOrganizationScope: boolean;
 }) {
   const router = useRouter();
   const toast = useToast();
@@ -35,12 +39,15 @@ export function RuleForm({
     name: "",
     type: ruleTypes[0]?.value ?? "low_fuel",
     description: "",
-    scope: "organization",
-    tankId: "",
-    stationId: "",
+    scope: allowOrganizationScope ? "organization" : stations.length > 0 ? "station" : "tank",
+    tankId: tanks[0]?.id ?? "",
+    stationId: stations[0]?.id ?? "",
+    deviceId: devices[0]?.id ?? "",
     fuelTypeId: "",
     severity: ruleTypes[0]?.severity ?? "warning",
-    conditionValue: String(Object.values(ruleTypes[0]?.condition ?? { percent: 20 })[0] ?? ""),
+    conditionValue: ruleTypes[0]?.value === "invalid_reading"
+      ? ""
+      : String(Object.values(ruleTypes[0]?.condition ?? { percent: 20 })[0] ?? ""),
     conditionKey: Object.keys(ruleTypes[0]?.condition ?? { percent: "" })[0] ?? "percent",
     cooldownMin: "30",
     isEnabled: true,
@@ -62,7 +69,7 @@ export function RuleForm({
       type: value,
       severity: type.severity,
       conditionKey: keys[0] ?? "percent",
-      conditionValue: String(Object.values(type.condition)[0] ?? ""),
+      conditionValue: value === "invalid_reading" ? "" : String(Object.values(type.condition)[0] ?? ""),
       name: form.name || `${type.label} alert`,
     });
   };
@@ -72,8 +79,11 @@ export function RuleForm({
     if (!form.name.trim()) errors.name = "Give the rule a name.";
     if (form.scope === "tank" && !form.tankId) errors.tankId = "Select the tank this rule applies to.";
     if (form.scope === "station" && !form.stationId) errors.stationId = "Select the station this rule applies to.";
-    const numeric = Number(form.conditionValue);
-    if (!form.conditionValue || !Number.isFinite(numeric)) errors.conditionValue = "Enter a numeric threshold.";
+    if (form.scope === "device" && !form.deviceId) errors.deviceId = "Select the device this rule applies to.";
+    if (form.type !== "invalid_reading") {
+      const numeric = Number(form.conditionValue);
+      if (!form.conditionValue || !Number.isFinite(numeric)) errors.conditionValue = "Enter a numeric threshold.";
+    }
     setFieldErrors(errors);
     return Object.keys(errors).length === 0;
   };
@@ -94,9 +104,12 @@ export function RuleForm({
           scope: form.scope,
           tankId: form.scope === "tank" ? form.tankId : null,
           stationId: form.scope === "station" ? form.stationId : null,
+          deviceId: form.scope === "device" ? form.deviceId : null,
           fuelTypeId: form.fuelTypeId || null,
           severity: form.severity,
-          condition: { [form.conditionKey]: Number(form.conditionValue) },
+          condition: form.type === "invalid_reading"
+            ? { metric: "validation", operator: "fails" }
+            : { [form.conditionKey]: Number(form.conditionValue) },
           channels: [form.channelInApp ? "in_app" : "", form.channelEmail ? "email" : ""].filter(Boolean),
           cooldownMin: Number(form.cooldownMin),
           isEnabled: form.isEnabled,
@@ -157,21 +170,27 @@ export function RuleForm({
               ]}
             />
           </Field>
-          <Field
-            label={`Threshold (${form.conditionKey})`}
-            htmlFor="conditionValue"
-            required
-            error={fieldErrors.conditionValue}
-            hint="The value that triggers the alert."
-          >
-            <Input
-              id="conditionValue"
-              value={form.conditionValue}
-              invalid={Boolean(fieldErrors.conditionValue)}
-              onChange={(event) => set({ conditionValue: event.target.value })}
-              inputMode="decimal"
-            />
-          </Field>
+          {form.type === "invalid_reading" ? (
+            <div className="flex items-center rounded-xl border border-[var(--line)] bg-[var(--surface-2)] px-3 py-2 text-[0.75rem] text-[var(--ink-2)]">
+              This rule fires when an incoming telemetry reading fails validation.
+            </div>
+          ) : (
+            <Field
+              label={`Threshold (${form.conditionKey})`}
+              htmlFor="conditionValue"
+              required
+              error={fieldErrors.conditionValue}
+              hint="The value that triggers the alert."
+            >
+              <Input
+                id="conditionValue"
+                value={form.conditionValue}
+                invalid={Boolean(fieldErrors.conditionValue)}
+                onChange={(event) => set({ conditionValue: event.target.value })}
+                inputMode="decimal"
+              />
+            </Field>
+          )}
           <Field
             label="Cooldown (minutes)"
             htmlFor="cooldownMin"
@@ -196,7 +215,7 @@ export function RuleForm({
               value={form.scope}
               onChange={(event) => set({ scope: event.target.value })}
               options={[
-                { value: "organization", label: "Whole organization" },
+                ...(allowOrganizationScope ? [{ value: "organization", label: "Whole organization" }] : []),
                 { value: "station", label: "A specific station" },
                 { value: "tank", label: "A specific tank" },
                 { value: "device", label: "A specific device" },
@@ -222,6 +241,17 @@ export function RuleForm({
                 onChange={(event) => set({ stationId: event.target.value })}
                 options={stations.map((station) => ({ value: station.id, label: station.name }))}
                 placeholder="Select a station"
+              />
+            </Field>
+          ) : null}
+          {form.scope === "device" ? (
+            <Field label="Device" htmlFor="deviceId" required error={fieldErrors.deviceId}>
+              <Select
+                id="deviceId"
+                value={form.deviceId}
+                onChange={(event) => set({ deviceId: event.target.value })}
+                options={devices.map((device) => ({ value: device.id, label: device.name }))}
+                placeholder="Select a device"
               />
             </Field>
           ) : null}

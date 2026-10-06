@@ -1,6 +1,5 @@
-import { deleteFuelType, getFuelType, updateFuelType } from "@/server/db/repo/stations";
-import { listAllTanks } from "@/server/db/repo/stations";
-import { ApiError, audit, jsonError, jsonOk, notFound, parseJsonBody, withPermission } from "@/server/api/route";
+import { deactivateFuelType, getFuelType, updateFuelType } from "@/server/db/repo/stations";
+import { audit, jsonError, jsonOk, notFound, parseJsonBody, withPermission } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
 
@@ -38,26 +37,19 @@ export const DELETE = withPermission("fuel_types.manage", async (request, ctx) =
     const fuelTypeId = ctx.params?.fuelTypeId ?? "";
     const existing = (await getFuelType(fuelTypeId));
     if (!existing || existing.organizationId !== ctx.user.organizationId) return jsonError(notFound(), request);
-    const tanks = (await listAllTanks(ctx.user.organizationId)).filter((tank) => tank.fuelTypeId === fuelTypeId);
-    if (tanks.length > 0) {
-      throw new ApiError(
-        409,
-        `${existing.displayName} is used by ${tanks.length} tank${tanks.length === 1 ? "" : "s"}. Reassign them before deleting it.`,
-        "conflict",
-      );
-    }
-    (await deleteFuelType(fuelTypeId));
+    const fuelType = await deactivateFuelType(fuelTypeId);
     (await audit({
       user: ctx.user,
-      action: "deleted",
+      action: "deactivated",
       entity: "fuel_type",
       entityId: existing.id,
       entityLabel: existing.displayName,
-      summary: `${ctx.user.name} deleted fuel type ${existing.displayName}`,
+      summary: `${ctx.user.name} deactivated fuel type ${existing.displayName}`,
       previous: existing,
+      next: fuelType,
       request,
     }));
-    return jsonOk({ id: fuelTypeId, deleted: true });
+    return jsonOk({ id: fuelTypeId, isActive: false, deleted: false });
   } catch (error) {
     return jsonError(error as Error, request);
   }

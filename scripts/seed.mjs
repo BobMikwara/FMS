@@ -8,17 +8,29 @@
  * guarantees the dashboard, charts and reports all agree with the underlying
  * series (PRD §37).
  *
- * Usage:  npm run db:reset
+ * Usage:  npm run db:seed (demo-only, requires an empty disposable SQLite database)
  */
 import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
-import { readFileSync, existsSync, rmSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import bcrypt from "bcryptjs";
 
 const ROOT = resolve(process.cwd());
-const DB_PATH = join(ROOT, "db", "smartfuel.db");
-const RESET = process.argv.includes("--reset");
+const databaseUrl = process.env.DATABASE_URL ?? "file:./db/smartfuel.db";
+const usesPostgres = process.env.DB_PROVIDER === "postgresql" || /^postgres(?:ql)?:\/\//.test(databaseUrl);
+if (usesPostgres) {
+  throw new Error("The SQLite demo seeder cannot target PostgreSQL. Use the separately guarded PostgreSQL bootstrap script.");
+}
+const sqlitePath = databaseUrl.replace(/^file:/, "");
+const DB_PATH = resolve(ROOT, sqlitePath || join("db", "smartfuel.db"));
+const seedArgs = new Set(process.argv.slice(2));
+if (seedArgs.has("--reset")) {
+  throw new Error("The demo seeder never resets a database. Use a new disposable SQLite file instead.");
+}
+if (!seedArgs.has("--demo")) {
+  throw new Error("Refusing to run the demo seeder without the explicit --demo flag.");
+}
 
 /* -------------------------------------------------------------------------- */
 /* helpers                                                                    */
@@ -70,10 +82,6 @@ const hashDeviceKey = (key) => createHash("sha256").update(key).digest("hex");
 /* -------------------------------------------------------------------------- */
 
 function ensureSchema(database) {
-  const row = database
-    .prepare("SELECT count(*) AS n FROM sqlite_master WHERE type='table' AND name='organizations'")
-    .get();
-  if (row && row.n > 0) return;
   database.exec(readFileSync(join(ROOT, "db", "schema.sqlite.sql"), "utf8"));
 }
 
@@ -276,45 +284,36 @@ const INTEGRATION_DEFS = [
 /* main                                                                       */
 /* -------------------------------------------------------------------------- */
 
-function main() {
-  if (RESET && existsSync(DB_PATH)) rmSync(DB_PATH);
-  for (const suffix of ["-wal", "-shm"]) {
-    if (existsSync(DB_PATH + suffix)) rmSync(DB_PATH + suffix);
+function assertEmptyDatabase(database) {
+  const tables = database
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all();
+  const populated = [];
+  for (const { name } of tables) {
+    const escaped = String(name).replaceAll('"', '""');
+    const row = database.prepare(`SELECT count(*) AS n FROM "${escaped}"`).get();
+    if (Number(row?.n ?? 0) > 0) populated.push(String(name));
   }
+  if (populated.length > 0) {
+    throw new Error(`Refusing to seed a non-empty SQLite database. Existing rows were found in: ${populated.join(", ")}. Use a new disposable database file.`);
+  }
+}
 
+function main() {
   const database = new DatabaseSync(DB_PATH);
   database.exec("PRAGMA journal_mode = WAL;");
   database.exec("PRAGMA foreign_keys = ON;");
   database.exec("PRAGMA busy_timeout = 5000;");
-  ensureSchema(database);
+  database.exec("BEGIN IMMEDIATE;");
 
-  const insert = (sql, params) => database.prepare(sql).run(...params);
-  const one = (sql, params = []) => database.prepare(sql).get(...params);
-
-  // A fresh seed starts from an empty database so re-running never trips the
-  // unique constraints on organizations.slug, user emails or device serials.
-  for (const table of [
-    "alert_notes",
-    "alerts",
-    "alert_rules",
-    "audit_logs",
-    "notifications",
-    "scheduled_reports",
-    "reports",
-    "fuel_events",
-    "readings",
-    "user_stations",
-    "vehicles",
-    "devices",
-    "tanks",
-    "stations",
-    "users",
-    "roles",
-    "fuel_types",
-    "organizations",
-  ]) {
-    database.prepare(`DELETE FROM ${table}`).run();
-  }
+  try {
+    // Check before schema setup: a populated legacy file must remain untouched.
+    // The lock and preflight share the transaction with schema creation and inserts,
+    // so a concurrent writer cannot turn an empty-database check into a wipe.
+    assertEmptyDatabase(database);
+    ensureSchema(database);
+    const insert = (sql, params) => database.prepare(sql).run(...params);
+    const one = (sql, params = []) => database.prepare(sql).get(...params);
 
   /* ---- organizations ---- */
   const org1 = "org_puma_tz";
@@ -1227,9 +1226,18 @@ function main() {
     rules: one("SELECT count(*) AS n FROM alert_rules").n,
     auditLogs: one("SELECT count(*) AS n FROM audit_logs").n,
   };
-  console.log("SmartFuel demo data ready:");
-  console.log(JSON.stringify(counts, null, 2));
-  database.close();
+    database.exec("COMMIT");
+    process.stdout.write(`SmartFuel demo data ready: ${JSON.stringify(counts)}\n`);
+  } catch (error) {
+    try {
+      database.exec("ROLLBACK");
+    } catch {
+      // The transaction may already have rolled back.
+    }
+    throw error;
+  } finally {
+    database.close();
+  }
 }
 
 /* -------------------------------------------------------------------------- */

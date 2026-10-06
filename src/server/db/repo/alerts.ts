@@ -24,9 +24,12 @@ export interface AlertFilter {
 export async function listAlerts(filter: AlertFilter): Promise<{ rows: Alert[]; total: number }> {
   const where: string[] = ["a.organization_id = ?"];
   const params: unknown[] = [filter.orgId];
-  if (filter.stationIds && filter.stationIds.length > 0) {
-    where.push(`a.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
-    params.push(...filter.stationIds);
+  if (filter.stationIds !== undefined) {
+    if (filter.stationIds.length === 0) where.push("1 = 0");
+    else {
+      where.push(`a.station_id IN (${filter.stationIds.map(() => "?").join(", ")})`);
+      params.push(...filter.stationIds);
+    }
   }
   if (filter.stationId) {
     where.push("a.station_id = ?");
@@ -100,6 +103,24 @@ export async function recentAlerts(orgId: string, limit = 8): Promise<Alert[]> {
     "SELECT * FROM alerts WHERE organization_id = ? ORDER BY created_at DESC LIMIT ?",
     [orgId, limit],
   )).map(mapAlert);
+}
+
+export async function latestAlertForRule(ruleId: string, tankId?: string, deviceId?: string): Promise<Alert | null> {
+  const where = ["rule_id = ?"];
+  const params: unknown[] = [ruleId];
+  if (tankId) {
+    where.push("tank_id = ?");
+    params.push(tankId);
+  }
+  if (deviceId) {
+    where.push("device_id = ?");
+    params.push(deviceId);
+  }
+  const row = await queryOne<Record<string, unknown>>(
+    `SELECT * FROM alerts WHERE ${where.join(" AND ")} ORDER BY created_at DESC LIMIT 1`,
+    params,
+  );
+  return row ? mapAlert(row) : null;
 }
 
 export async function activeAlertsForTank(tankId: string, type?: string): Promise<Alert[]> {
@@ -199,9 +220,6 @@ export async function reopenAlert(alertId: string): Promise<Alert | null> {
   return (await updateAlert(alertId, { status: "active", resolvedAt: null, resolvedById: null, resolutionNote: null }));
 }
 
-export async function deleteAlert(alertId: string): Promise<void> {
-  (await execute("DELETE FROM alerts WHERE id = ?", [alertId]));
-}
 
 /* -------------------------------------------------------------------------- */
 /* Alert notes                                                                */
@@ -235,10 +253,40 @@ export async function addAlertNote(alertId: string, userId: string, body: string
 /* Alert rules                                                                */
 /* -------------------------------------------------------------------------- */
 
-export async function listAlertRules(orgId: string): Promise<AlertRule[]> {
+export async function listAlertRules(orgId: string, stationIds?: string[]): Promise<AlertRule[]> {
+  if (stationIds !== undefined && stationIds.length === 0) return [];
+  const stationCte = stationIds === undefined
+    ? ""
+    : `WITH station_scope AS (SELECT id FROM stations WHERE organization_id = ? AND id IN (${stationIds.map(() => "?").join(", ")}))`;
+  const stationParams = stationIds === undefined ? [] : [orgId, ...stationIds];
+  const stationClause = stationIds === undefined
+    ? ""
+    : ` AND ar.scope <> 'organization'
+      AND (
+        (ar.station_id IS NOT NULL OR ar.tank_id IS NOT NULL OR ar.device_id IS NOT NULL)
+        AND (ar.station_id IS NULL OR ar.station_id IN (SELECT id FROM station_scope))
+        AND (ar.tank_id IS NULL OR ar.tank_id IN (
+          SELECT t.id FROM tanks t WHERE t.organization_id = ar.organization_id AND t.station_id IN (SELECT id FROM station_scope)
+        ))
+        AND (ar.device_id IS NULL OR ar.device_id IN (
+          SELECT d.id FROM devices d WHERE d.organization_id = ar.organization_id
+            AND (d.station_id IS NULL OR d.station_id IN (SELECT id FROM station_scope))
+            AND (d.tank_id IS NULL OR d.tank_id IN (
+              SELECT t.id FROM tanks t WHERE t.organization_id = d.organization_id AND t.station_id IN (SELECT id FROM station_scope)
+            ))
+            AND (d.vehicle_id IS NULL OR d.vehicle_id IN (
+              SELECT v.id FROM vehicles v WHERE v.organization_id = d.organization_id AND v.station_id IN (SELECT id FROM station_scope)
+            ))
+            AND (
+              d.station_id IN (SELECT id FROM station_scope)
+              OR d.tank_id IN (SELECT t.id FROM tanks t WHERE t.organization_id = d.organization_id AND t.station_id IN (SELECT id FROM station_scope))
+              OR d.vehicle_id IN (SELECT v.id FROM vehicles v WHERE v.organization_id = d.organization_id AND v.station_id IN (SELECT id FROM station_scope))
+            )
+        ))
+      )`;
   return (await query<Record<string, unknown>>(
-    "SELECT * FROM alert_rules WHERE organization_id = ? ORDER BY is_enabled DESC, name",
-    [orgId],
+    `${stationCte} SELECT ar.* FROM alert_rules ar WHERE ar.organization_id = ?${stationClause} ORDER BY ar.is_enabled DESC, ar.name`,
+    [...stationParams, orgId],
   )).map(mapRule);
 }
 
@@ -302,7 +350,13 @@ export async function updateAlertRule(ruleId: string, patch: Record<string, unkn
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
     fields.push(`${snake(key)} = ?`);
-    values.push(typeof value === "boolean" ? (value ? 1 : 0) : value);
+    values.push(
+      typeof value === "boolean"
+        ? (value ? 1 : 0)
+        : key === "condition" || key === "channels"
+          ? JSON.stringify(value)
+          : value,
+    );
   }
   if (fields.length === 0) return (await getAlertRule(ruleId));
   values.push(ruleId);
@@ -310,8 +364,8 @@ export async function updateAlertRule(ruleId: string, patch: Record<string, unkn
   return (await getAlertRule(ruleId));
 }
 
-export async function deleteAlertRule(ruleId: string): Promise<void> {
-  (await execute("DELETE FROM alert_rules WHERE id = ?", [ruleId]));
+export async function disableAlertRule(ruleId: string): Promise<AlertRule | null> {
+  return (await updateAlertRule(ruleId, { isEnabled: false }));
 }
 
 function mapRule(row: Record<string, unknown>): AlertRule {

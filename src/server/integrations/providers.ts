@@ -1,14 +1,14 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
+import type { NormalizedVehiclePosition } from "../domain/types";
 import type { NormalizedReading } from "../engine/fuel";
+import { normalizeGpsPosition } from "./gps";
 
 /**
  * Device Integration Layer (PRD §57).
  *
- * Every hardware vendor or telematics platform is represented by a `DeviceProvider`
- * that knows how to (a) authenticate an inbound payload and (b) translate a
- * vendor payload into the platform's `NormalizedReading` shape. Adding a new
- * probe or GPS provider is a matter of registering an adapter here — nothing
- * else in the application changes.
+ * Fuel-probe adapters normalize readings for the tank-fuel path. GPS adapters
+ * normalize to a separate vehicle-position model and are persisted by the vehicle
+ * telemetry service. GPS messages must never be coerced into `NormalizedReading`.
  */
 
 export interface ProviderInfo {
@@ -34,8 +34,10 @@ export interface ProviderInfo {
 export interface DeviceProvider extends ProviderInfo {
   /** Verifies the request signature. Returns true when the payload is trusted. */
   verify(request: Request, rawBody: string, secret: string): boolean;
-  /** Translates a vendor payload into the normalized reading model. */
+  /** Translates a fuel-probe payload into the tank-reading model. GPS adapters return null here. */
   normalize(payload: Record<string, unknown>): NormalizedReading | null;
+  /** Translates a GPS payload into the separate vehicle-position model. */
+  normalizePosition?(payload: Record<string, unknown>): NormalizedVehiclePosition | null;
 }
 
 function hmacEqual(a: string, b: string): boolean {
@@ -47,8 +49,8 @@ function hmacEqual(a: string, b: string): boolean {
 
 function num(value: unknown): number | null {
   if (value == null || value === "") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value !== "number" && typeof value !== "string") return Number.NaN;
+  return Number(value);
 }
 
 function str(value: unknown): string | null {
@@ -96,7 +98,7 @@ const tectonic: DeviceProvider = {
     const volume = firstNumber(payload, ["volumeLiters", "volume_liters", "volume", "grossVolume"]);
     if (volume == null) return null;
     return {
-      ts: str(payload.timestamp ?? payload.ts ?? payload.readingAt) ?? new Date().toISOString(),
+      ts: str(payload.timestamp ?? payload.ts ?? payload.readingAt) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(payload, ["levelMm", "fuelHeightMm", "productLevelMm"]),
       levelPercent: firstNumber(payload, ["levelPercent", "percentFull", "fillPercent"]),
@@ -143,7 +145,7 @@ const veederRoot: DeviceProvider = {
     const volume = firstNumber(tank as Record<string, unknown>, ["volume", "grossVolume", "volumeLiters"]);
     if (volume == null) return null;
     return {
-      ts: str(tank.timestamp ?? payload.timestamp) ?? new Date().toISOString(),
+      ts: str(tank.timestamp ?? payload.timestamp) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(tank as Record<string, unknown>, ["level", "fuelHeight", "productLevel"]),
       levelPercent: firstNumber(tank as Record<string, unknown>, ["percentFull", "levelPercent"]),
@@ -188,7 +190,7 @@ const genericMqtt: DeviceProvider = {
     const volume = firstNumber(payload, ["volumeLiters", "volume_liters", "volume"]);
     if (volume == null) return null;
     return {
-      ts: str(payload.ts ?? payload.timestamp) ?? new Date().toISOString(),
+      ts: str(payload.ts ?? payload.timestamp) ?? "",
       volumeLiters: volume,
       levelMm: firstNumber(payload, ["levelMm", "level_mm"]),
       levelPercent: firstNumber(payload, ["levelPercent", "level_percent"]),
@@ -210,7 +212,7 @@ const queclink: DeviceProvider = {
   name: "Queclink Fleet API",
   kind: "gps",
   docsUrl: "https://docs.queclink.example/openapi",
-  description: "Queclink GV-series trackers. Position, ignition and odometer are reported on a 20-second cadence.",
+  description: "Registry scaffold only. GPS ingestion is not enabled; verify the tracker model and payload mapping before activation.",
   supports: {
     fuelVolume: false,
     fuelHeight: false,
@@ -228,14 +230,11 @@ const queclink: DeviceProvider = {
     if (!key) return false;
     return hmacEqual(key, secret);
   },
-  normalize(payload) {
-    return {
-      ts: str(payload.gpsUtcTime ?? payload.timestamp) ?? new Date().toISOString(),
-      volumeLiters: null,
-      signal: firstNumber(payload, ["gsmSignal", "signal"]),
-      batteryPct: firstNumber(payload, ["batteryPower", "battery"]),
-      raw: payload,
-    };
+  normalize(_payload) {
+    return null;
+  },
+  normalizePosition(payload) {
+    return normalizeGpsPosition(payload);
   },
 };
 
@@ -248,7 +247,7 @@ const teltonika: DeviceProvider = {
   name: "Teltonika FMC",
   kind: "gps",
   docsUrl: "https://docs.teltonika.example/fmc",
-  description: "Teltonika Fleet Management Communicator. Codec 8 payloads decoded by the bridge before normalization.",
+  description: "Normalizes the configured GPS webhook shape into vehicle-position telemetry. Confirm the deployed Teltonika model, firmware, codec and payload mapping before production use.",
   supports: {
     fuelVolume: false,
     fuelHeight: false,
@@ -266,14 +265,11 @@ const teltonika: DeviceProvider = {
     if (!key) return false;
     return hmacEqual(key, secret);
   },
-  normalize(payload) {
-    return {
-      ts: str(payload.timestamp) ?? new Date().toISOString(),
-      volumeLiters: null,
-      signal: firstNumber(payload, ["rssi", "signal"]),
-      batteryPct: firstNumber(payload, ["batteryLevel", "battery"]),
-      raw: payload,
-    };
+  normalize(_payload) {
+    return null;
+  },
+  normalizePosition(payload) {
+    return normalizeGpsPosition(payload);
   },
 };
 
@@ -290,7 +286,7 @@ export function getProvider(key: string): DeviceProvider | null {
 }
 
 export function listProviderInfo(): ProviderInfo[] {
-  return Object.values(PROVIDERS).map(({ verify: _v, normalize: _n, ...info }) => info);
+  return Object.values(PROVIDERS).map(({ verify: _v, normalize: _n, normalizePosition: _p, ...info }) => info);
 }
 
 /**

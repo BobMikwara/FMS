@@ -1,8 +1,10 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
+import { hasPermission } from "@/server/auth/session";
 import { getTank } from "@/server/db/repo/stations";
 import { listEvents } from "@/server/db/repo/events";
 import { readingsForTank } from "@/server/db/repo/readings";
 import { isoDaysAgo } from "@/lib/utils";
-import { jsonError, jsonOk, notFound, withPermission } from "@/server/api/route";
+import { forbidden, jsonError, jsonOk, notFound, withPermission } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
 
@@ -14,14 +16,15 @@ export const dynamic = "force-dynamic";
  * the derived movements (refills / outflow / anomalies) that occurred inside
  * the same window.
  */
-export const GET = withPermission("tanks.view", async (request, ctx) => {
+export const GET = withPermission("readings.view", async (request, ctx) => {
   try {
+    if (!hasPermission(ctx.user, "movements.view")) return jsonError(forbidden(), request);
     const tankId = ctx.params?.tankId ?? "";
     const tank = (await getTank(tankId));
     if (
       !tank ||
       tank.organizationId !== ctx.user.organizationId ||
-      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+      !userCanAccessStation(ctx.user, tank.stationId)
     ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;

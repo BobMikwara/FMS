@@ -1,3 +1,4 @@
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
 import { listAllStations, listFuelTypes } from "@/server/db/repo/stations";
 import { createVehicle, listVehicles } from "@/server/db/repo/devices";
 import type { Vehicle } from "@/server/domain/types";
@@ -21,7 +22,8 @@ export const GET = withPermission("vehicles.view", async (request, ctx) => {
       page,
       pageSize,
       includeArchived: params.get("archived") === "true",
-      stationIds: ctx.user.stationIds.length > 0 ? ctx.user.stationIds : undefined,
+      archivedOnly: params.get("archived") === "true",
+      stationIds: stationScopeForUser(ctx.user),
     }));
     return jsonOk({ rows: result.rows, total: result.total, page, pageSize });
   } catch (error) {
@@ -34,7 +36,7 @@ export const POST = withPermission("vehicles.create", async (request, ctx) => {
     const body = await parseJsonBody<Record<string, unknown>>(request);
     const name = maxLen(required(body.name, "Vehicle name"), 120, "Vehicle name");
     const plateNumber = maxLen(required(body.plateNumber, "Plate number"), 32, "Plate number");
-    const fuelTypes = (await listFuelTypes(ctx.user.organizationId));
+    const fuelTypes = (await listFuelTypes(ctx.user.organizationId, true));
     const requestedFuelTypeId = str(body.fuelTypeId);
     if (requestedFuelTypeId && !fuelTypes.some((fuelType) => fuelType.id === requestedFuelTypeId)) {
       throw new ApiError(422, "The selected fuel type does not exist in your organization.", "validation_error");
@@ -44,8 +46,11 @@ export const POST = withPermission("vehicles.create", async (request, ctx) => {
     if (requestedStationId && !stations.some((station) => station.id === requestedStationId)) {
       throw new ApiError(422, "The selected station does not exist in your organization.", "validation_error");
     }
-    if (requestedStationId && ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(requestedStationId)) {
+    if (requestedStationId && !userCanAccessStation(ctx.user, requestedStationId)) {
       throw new ApiError(403, "You are not scoped to the selected station.", "forbidden");
+    }
+    if (stationScopeForUser(ctx.user) !== undefined && !requestedStationId) {
+      throw new ApiError(403, "A station must be selected for a station-scoped vehicle.", "forbidden");
     }
   let vehicle!: Vehicle;
   try {

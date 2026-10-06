@@ -7,7 +7,8 @@ export const dynamic = "force-dynamic";
 export const GET = withPermission("integrations.view", async (request, ctx) => {
   try {
     const rows = (await listIntegrations(ctx.user.organizationId));
-    return jsonOk({ rows, total: rows.length, providers: listProviderInfo() });
+    const visibleRows = rows.map((integration) => ({ ...integration, config: undefined }));
+    return jsonOk({ rows: visibleRows, total: visibleRows.length, providers: listProviderInfo() });
   } catch (error) {
     return jsonError(error as Error, request);
   }

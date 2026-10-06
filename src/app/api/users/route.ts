@@ -1,7 +1,10 @@
+import { hasOrganizationWideStationAccess, isPlatformOwner, roleRequiresStationAssignment, stationScopeForUser, userCanAccessStation, userCanAccessStationScopedUser } from "@/server/auth/authorization";
 import type { User } from "@/server/domain/types";
 import { createUser, listRoles, listUsers, setUserStations } from "@/server/db/repo/core";
 import { listAllStations } from "@/server/db/repo/stations";
-import { hashPassword } from "@/server/auth/session";
+import { createInvitationToken, hashPassword } from "@/server/auth/session";
+import { sendUserInvitationEmail } from "@/server/email/mailer";
+import { randomBytes } from "node:crypto";
 import {
   ApiError,
   audit,
@@ -23,13 +26,17 @@ export const GET = withPermission("users.view", async (request, ctx) => {
   try {
     const params = new URL(request.url).searchParams;
     const search = params.get("search") ?? undefined;
-    let rows = (await listUsers(ctx.user.organizationId));
+    let rows = (await listUsers(ctx.user.organizationId, stationScopeForUser(ctx.user)))
+      .filter((user) => userCanAccessStationScopedUser(ctx.user, user.stationIds, user.roleKey));
     if (search) {
       const term = search.toLowerCase();
       rows = rows.filter((user) => `${user.name} ${user.email} ${user.roleName}`.toLowerCase().includes(term));
     }
     const { page, pageSize } = parsePagination(params, 20);
-    const paged = rows.slice((page - 1) * pageSize, page * pageSize);
+    const paged = rows.slice((page - 1) * pageSize, page * pageSize).map((user) => ({
+      ...user,
+      stationIds: user.stationIds.filter((stationId) => userCanAccessStation(ctx.user, stationId)),
+    }));
     return jsonOk({ rows: paged, total: rows.length, page, pageSize });
   } catch (error) {
     return jsonError(error as Error, request);
@@ -42,30 +49,33 @@ export const POST = withPermission("users.create", async (request, ctx) => {
     const email = required(body.email, "Email").toLowerCase().trim();
     const name = maxLen(required(body.name, "Full name"), 120, "Full name");
     const roleId = required(body.roleId, "Role");
-    const password = String(body.password ?? "");
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       throw new ApiError(422, "Enter a valid email address.", "validation_error");
-    }
-    if (password.length < 10) {
-      throw new ApiError(422, "A temporary password of at least 10 characters is required.", "validation_error");
     }
 
     const roles = (await listRoles());
     const role = roles.find((row) => row.id === roleId);
     if (!role) throw new ApiError(422, "Select a valid role.", "validation_error");
-    // Never allow a non-owner to mint a more powerful account.
-    if (role.key === "super_admin" && ctx.user.roleKey !== "super_admin") {
+    // Only organization-wide administrators may create organization-wide roles.
+    if (isPlatformOwner(role.key) && !isPlatformOwner(ctx.user.roleKey)) {
       throw new ApiError(403, "Only an owner can create another owner account.", "forbidden");
+    }
+    if (!hasOrganizationWideStationAccess(ctx.user) && (role.key === "admin" || isPlatformOwner(role.key))) {
+      throw new ApiError(403, "A station-scoped user cannot grant organization-wide access.", "forbidden");
     }
 
     const stations = (await listAllStations(ctx.user.organizationId));
     const requestedStations = Array.isArray(body.stationIds) ? (body.stationIds as string[]) : [];
-    const stationIds = requestedStations.filter((id) => stations.some((station) => station.id === id));
-    if (role.key === "manager" || role.key === "operator") {
-      if (stationIds.length === 0) {
-        throw new ApiError(422, "This role is scoped to stations — select at least one.", "validation_error");
-      }
+    const stationIds = [...new Set(requestedStations)];
+    if (stationIds.some((id) => !stations.some((station) => station.id === id))) {
+      throw new ApiError(422, "One or more selected stations do not exist in your organization.", "validation_error");
+    }
+    if (stationIds.some((id) => !userCanAccessStation(ctx.user, id))) {
+      throw new ApiError(403, "You cannot assign a user to a station outside your own scope.", "forbidden");
+    }
+    if (roleRequiresStationAssignment(role.key) && stationIds.length === 0) {
+      throw new ApiError(422, "Assign at least one station to every non-administrator account.", "validation_error");
     }
 
   let user!: User;
@@ -75,16 +85,28 @@ export const POST = withPermission("users.create", async (request, ctx) => {
         email,
         name,
         roleId,
-        passwordHash: await hashPassword(password),
+        passwordHash: await hashPassword(randomBytes(48).toString("base64url")),
         phone: str(body.phone) || null,
         jobTitle: str(body.jobTitle) || null,
         status: "invited",
-        mfaEnabled: body.mfaEnabled === true,
       }));
   } catch (error) {
     uniqueViolation(error, "An account with this email address", "email address");
   }
     (await setUserStations(user.id, stationIds));
+    let invitationEmailSent = false;
+    const invitation = await createInvitationToken(user.id);
+    if (invitation) {
+      try {
+        invitationEmailSent = await sendUserInvitationEmail({
+          to: invitation.user.email,
+          name: invitation.user.name,
+          token: invitation.token,
+        });
+      } catch {
+        invitationEmailSent = false;
+      }
+    }
 
     (await audit({
       user: ctx.user,
@@ -96,7 +118,7 @@ export const POST = withPermission("users.create", async (request, ctx) => {
       next: { ...user, stationIds },
       request,
     }));
-    return jsonCreated({ ...user, stationIds });
+    return jsonCreated({ ...user, stationIds, invitationEmailSent });
   } catch (error) {
     return jsonError(error as Error, request);
   }

@@ -1,3 +1,4 @@
+import { userCanAccessStation } from "@/server/auth/authorization";
 import { getTank } from "@/server/db/repo/stations";
 import { latestReadingForTank, listReadings, readingsForTank } from "@/server/db/repo/readings";
 import { isoDaysAgo } from "@/lib/utils";
@@ -18,7 +19,7 @@ export const GET = withPermission("readings.view", async (request, ctx) => {
     if (
       !tank ||
       tank.organizationId !== ctx.user.organizationId ||
-      (ctx.user.stationIds.length > 0 && !ctx.user.stationIds.includes(tank.stationId))
+      !userCanAccessStation(ctx.user, tank.stationId)
     ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;

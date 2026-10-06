@@ -190,7 +190,7 @@ content-type: application/json`}
     <form onSubmit={submit} className="space-y-5" noValidate>
       <PageHeader
         title="Register device"
-        description="Fuel probes report tank volume; GPS trackers report position, speed and ignition for a vehicle."
+        description="Fuel probes can submit readings. GPS tracker registration is available, but GPS telemetry ingestion and live position display are not enabled."
         breadcrumbs={[{ label: "Devices", href: "/devices" }, { label: "Register device" }]}
         actions={
           <div className="flex items-center gap-2">
@@ -222,7 +222,7 @@ content-type: application/json`}
             {
               value: "gps_tracker" as const,
               title: "GPS tracker",
-              body: "Reports location, speed, ignition and odometer for a vehicle.",
+              body: "Registry assignment only. Position, speed, ignition and odometer are not ingested or stored yet.",
             },
           ]).map((option) => (
             <button

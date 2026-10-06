@@ -1,4 +1,5 @@
-import { getCurrentUser } from "@/server/auth/session";
+import { stationScopeForUser, userCanAccessStation } from "@/server/auth/authorization";
+import { getCurrentUser, hasPermission } from "@/server/auth/session";
 import { listAlerts } from "@/server/db/repo/alerts";
 import { listAllStations, listAllTanks } from "@/server/db/repo/stations";
 import { PageHeader, StatCard } from "@/components/ui/layout";
@@ -13,13 +14,13 @@ export default async function AlertsPage() {
   const { rows } = (await listAlerts({
     orgId: user.organizationId,
     pageSize: 50,
-    stationIds: user.stationIds.length > 0 ? user.stationIds : undefined,
+    stationIds: stationScopeForUser(user),
   }));
   const stations = (await listAllStations(user.organizationId)).filter(
-    (station) => user.stationIds.length === 0 || user.stationIds.includes(station.id),
+    (station) => userCanAccessStation(user, station.id),
   );
   const tanks = (await listAllTanks(user.organizationId)).filter(
-    (tank) => user.stationIds.length === 0 || user.stationIds.includes(tank.stationId),
+    (tank) => userCanAccessStation(user, tank.stationId),
   );
   const stationName = new Map(stations.map((station) => [station.id, station.name]));
   const tankName = new Map(tanks.map((tank) => [tank.id, tank.name]));
@@ -39,11 +40,11 @@ export default async function AlertsPage() {
       <PageHeader
         title="Alert centre"
         description="Alerts move through Active → Acknowledged → Resolved. Acknowledge to take ownership, then resolve with a note so the next operator understands what happened."
-        actions={
+        actions={hasPermission(user, "alert_rules.view") ? (
           <a href="/alerts/rules" className="btn btn-secondary btn-sm">
             Alert rules
           </a>
-        }
+        ) : undefined}
       />
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -71,6 +72,10 @@ export default async function AlertsPage() {
       <AlertsBrowser
         initialRows={enriched}
         stations={stations.map((station) => ({ id: station.id, name: station.name }))}
+        canAcknowledge={hasPermission(user, "alerts.acknowledge")}
+        canResolve={hasPermission(user, "alerts.resolve")}
+        canNote={hasPermission(user, "alerts.notes")}
+        canViewRules={hasPermission(user, "alert_rules.view")}
       />
 
       <section className="card p-5">

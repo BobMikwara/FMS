@@ -1,3 +1,4 @@
+import { hasOrganizationWideStationAccess, userCanAccessStation } from "@/server/auth/authorization";
 import { getCurrentUser } from "@/server/auth/session";
 import { getVehicle } from "@/server/db/repo/devices";
 import { listAllStations, listFuelTypes } from "@/server/db/repo/stations";
@@ -14,9 +15,9 @@ export default async function EditVehiclePage({ params }: { params: Promise<{ ve
   if (!user) return null;
 
   const vehicle = (await getVehicle(vehicleId));
-  if (!vehicle || vehicle.organizationId !== user.organizationId) notFound();
+  if (!vehicle || vehicle.organizationId !== user.organizationId || (!hasOrganizationWideStationAccess(user) && !userCanAccessStation(user, vehicle.stationId))) notFound();
 
-  const stations = (await listAllStations(user.organizationId)).filter((station) => !station.isArchived);
+  const stations = (await listAllStations(user.organizationId)).filter((station) => userCanAccessStation(user, station.id) && !station.isArchived);
   const fuelTypes = (await listFuelTypes(user.organizationId));
   const vehicleCount = (await listAllVehicles(user.organizationId)).length;
 
