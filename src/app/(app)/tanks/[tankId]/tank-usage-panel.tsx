@@ -1,13 +1,13 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo } from "react";
 import { UsageChart, type UsageChartDatum } from "@/components/charts/usage-chart";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/feedback";
 import { formatDateKey } from "@/lib/calendar-dates";
-import { localDateKey, resolveUsageRange, todayDateKey, type UsageInterval, type UsageReport } from "@/lib/tank-usage";
+import { localDateKey, type UsageInterval, type UsageReport } from "@/lib/tank-usage";
 import { bucketTickLabel, bucketTitle, formatPeriod } from "@/lib/tank-usage-labels";
+import { UsageRangeSelector, useUsageSelection } from "@/components/domain/usage-range-selector";
 import { UsageMetrics } from "./usage-metrics";
-import { UsageRangeSelector, type UsageSelection } from "./usage-range-selector";
 import { useTankUsage } from "./use-tank-usage";
 
 const INTERVAL_NOUN: Record<UsageInterval, string> = { hour: "hour", day: "day", week: "week" };
@@ -53,17 +53,7 @@ function UsageSkeleton() {
  */
 export function TankUsagePanel({ tankId, tankName, timeZone }: { tankId: string; tankName: string; timeZone: string }) {
   const headingId = useId();
-  const today = useMemo(() => todayDateKey(new Date(), timeZone), [timeZone]);
-  const [selection, setSelection] = useState<UsageSelection>(() => ({
-    preset: "today",
-    start: `${today.slice(0, 7)}-01`,
-    end: today,
-  }));
-
-  const resolved = useMemo(
-    () => resolveUsageRange({ preset: selection.preset, start: selection.start, end: selection.end }, new Date(), timeZone),
-    [selection, timeZone],
-  );
+  const { selection, setSelection, today, resolved } = useUsageSelection(timeZone);
   const { state, reload } = useTankUsage(
     tankId,
     resolved.ok ? { preset: selection.preset, start: selection.start, end: selection.end } : null,

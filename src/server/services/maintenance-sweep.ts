@@ -113,7 +113,11 @@ export async function claimSweepLease(intervalSeconds: number, now = Date.now())
 export async function runMaintenanceSweep(): Promise<MaintenanceSweepSummary> {
   const organizations = await listOrganizations();
   const activeOrganizations = organizations.filter((organization) => organization.isActive);
-  const results = await mapWithConcurrency(activeOrganizations, 3, async (organization) => ({
+  // One organization at a time. Each device-health pass runs in a transaction and
+  // the runtime pool holds a single connection, so overlapping passes cannot run
+  // in parallel anyway — they would only keep that connection reserved for longer
+  // and delay whatever request traffic needs it next.
+  const results = await mapWithConcurrency(activeOrganizations, 1, async (organization) => ({
     organizationId: organization.id,
     ...(await sweepDeviceHealth(organization.id)),
   }));
@@ -150,10 +154,16 @@ let lastAttemptAt = 0;
 let inFlight: Promise<void> | null = null;
 
 /**
- * Asks for a sweep without blocking the caller. Cheap enough to call on every
+ * Asks for a sweep without delaying the caller. Cheap enough to call on every
  * request: the in-process timestamp short-circuits all but one attempt per
- * interval per instance, and `after` keeps serverless functions alive until the
- * sweep settles instead of killing it with the response.
+ * interval per instance.
+ *
+ * The sweep itself is handed to `after`, so none of its work starts until the
+ * response has been sent. That matters because the sweep opens transactions and
+ * the runtime holds a single pooled database connection: started inline, its
+ * queries would queue ahead of the ones the user's request is waiting for and
+ * could hold the request open past its deadline — which is exactly what left
+ * data panels such as the tank Usage and Usage Replay views loading forever.
  */
 export function scheduleMaintenanceSweep(reason: string): void {
   const now = Date.now();
@@ -161,20 +171,25 @@ export function scheduleMaintenanceSweep(reason: string): void {
   if (!intervalElapsed(lastAttemptAt, now, sweepIntervalSeconds() * 1000)) return;
   lastAttemptAt = now;
 
-  const task = startMaintenanceSweep(reason).then(
-    () => undefined,
-    () => undefined,
-  );
-  inFlight = task;
-  const release = () => {
-    if (inFlight === task) inFlight = null;
+  const start = (): Promise<void> => {
+    const task = startMaintenanceSweep(reason).then(
+      () => undefined,
+      () => undefined,
+    );
+    inFlight = task;
+    const release = () => {
+      if (inFlight === task) inFlight = null;
+    };
+    return task.then(release, release);
   };
 
   try {
-    after(() => task.then(release, release));
+    // `after` runs once the response is on its way and keeps the serverless
+    // function alive until the sweep settles.
+    after(start);
   } catch {
     // Outside a request scope (scripts, tests): run it unmanaged instead.
-    void task.then(release, release);
+    void start();
   }
 }
 

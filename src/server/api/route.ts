@@ -160,8 +160,9 @@ export function withAuth<T>(handler: Handler<T>): WrappedHandler {
       const { max, windowSeconds } = rateLimitConfig();
       await rateLimit(`user:${user.id}`, max, windowSeconds);
       // Vercel Hobby fires the maintenance Cron only once a day, so operator
-      // traffic keeps the sweep warm in between. Non-blocking and leased: at
-      // most one sweep per interval across all instances.
+      // traffic keeps the sweep warm in between. Leased (at most one sweep per
+      // interval across all instances) and deferred: none of its work starts
+      // until this response has been sent, so it can never delay this request.
       scheduleMaintenanceSweep("api-request");
       const resolved = routeCtx?.params ? await routeCtx.params : undefined;
       const params = (resolved ?? undefined) as Record<string, string> | undefined;
