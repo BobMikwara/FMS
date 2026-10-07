@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { Component, useId, useMemo, useState } from "react";
 import { UsageChart, type UsageChartDatum } from "@/components/charts/usage-chart";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/feedback";
 import { formatDateKey } from "@/lib/calendar-dates";
@@ -51,7 +51,35 @@ function UsageSkeleton() {
  * and the chart. The selection is the single source of truth; it is turned into
  * one request, and the one report that comes back feeds every part of the view.
  */
-export function TankUsagePanel({ tankId, tankName, timeZone }: { tankId: string; tankName: string; timeZone: string }) {
+interface UsagePanelErrorBoundaryState {
+  hasError: boolean;
+}
+
+class UsagePanelErrorBoundary extends Component<
+  { children: React.ReactNode },
+  UsagePanelErrorBoundaryState
+> {
+  state: UsagePanelErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): UsagePanelErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <section className="card p-5" aria-live="polite">
+        <ErrorState
+          title="Usage could not be displayed"
+          message="An unexpected error occurred while displaying this tank's usage. Please try again."
+          onRetry={() => this.setState({ hasError: false })}
+        />
+      </section>
+    );
+  }
+}
+
+function TankUsagePanelContent({ tankId, tankName, timeZone }: { tankId: string; tankName: string; timeZone: string }) {
   const headingId = useId();
   const today = useMemo(() => todayDateKey(new Date(), timeZone), [timeZone]);
   const [selection, setSelection] = useState<UsageSelection>(() => ({
@@ -90,7 +118,7 @@ export function TankUsagePanel({ tankId, tankName, timeZone }: { tankId: string;
       <EmptyState
         compact
         icon={<ChartIcon />}
-        title="No data for this period"
+        title="No usage data available for this period."
         description={
           report.dataStart
             ? `This tank's data begins on ${formatDateKey(localDateKey(report.dataStart, report.timeZone))}. Choose a period on or after that date.`
@@ -156,5 +184,13 @@ export function TankUsagePanel({ tankId, tankName, timeZone }: { tankId: string;
         {body}
       </div>
     </section>
+  );
+}
+
+export function TankUsagePanel(props: { tankId: string; tankName: string; timeZone: string }) {
+  return (
+    <UsagePanelErrorBoundary>
+      <TankUsagePanelContent {...props} />
+    </UsagePanelErrorBoundary>
   );
 }
