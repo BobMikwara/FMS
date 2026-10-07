@@ -4,9 +4,16 @@ import { getTank } from "@/server/db/repo/stations";
 import { listEvents } from "@/server/db/repo/events";
 import { readingsForTank } from "@/server/db/repo/readings";
 import { isoDaysAgo } from "@/lib/utils";
-import { forbidden, jsonError, jsonOk, notFound, withPermission } from "@/server/api/route";
+import { badRequest, forbidden, jsonError, jsonOk, notFound, withPermission } from "@/server/api/route";
 
 export const dynamic = "force-dynamic";
+
+/** A query parameter as an ISO instant, or `null` when it is absent or unusable. */
+function instant(value: string | null): string | null {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
 
 /**
  * Fuel Usage Replay source data (PRD §47).
@@ -28,8 +35,12 @@ export const GET = withPermission("readings.view", async (request, ctx) => {
     ) return jsonError(notFound(), request);
 
     const params = new URL(request.url).searchParams;
-    const from = params.get("from") ?? isoDaysAgo(1);
-    const to = params.get("to") ?? new Date().toISOString();
+    // The window is optional; when it is given it must be usable, so an invalid
+    // instant is refused with a message rather than queried for silently.
+    const from = instant(params.get("from")) ?? (params.get("from") ? null : isoDaysAgo(1));
+    const to = instant(params.get("to")) ?? (params.get("to") ? null : new Date().toISOString());
+    if (!from || !to) return jsonError(badRequest("Choose a valid start and end for the replay window."), request);
+    if (from > to) return jsonError(badRequest("The replay window must end after it starts."), request);
     const buckets = Math.min(Math.max(Number(params.get("buckets") ?? 96) || 96, 8), 500);
 
     const rows = (await readingsForTank(tankId, from, to, 50000));

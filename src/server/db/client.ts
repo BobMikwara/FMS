@@ -92,7 +92,16 @@ function postgresDb(): PostgresConnection {
     ssl: "require",
     connect_timeout: 10,
     idle_timeout: 20,
-    connection: { application_name: "smartfuel-vercel" },
+    connection: {
+      application_name: "smartfuel-vercel",
+      // Server-side deadlines. The runtime keeps a single pooled connection, so a
+      // statement or a transaction that is left hanging — a background sweep whose
+      // instance was frozen, a query against an unexpectedly large scan — would
+      // otherwise block every later request on that instance indefinitely. These
+      // are session settings only: they change no data and no schema.
+      statement_timeout: 25_000,
+      idle_in_transaction_session_timeout: 15_000,
+    },
   });
   return postgresInstance;
 }

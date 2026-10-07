@@ -19,7 +19,7 @@ not enabled; map vehicle markers use clearly labelled static home-station coordi
 | **Inventory reconciliation** | Opening stock + refills − consumption = expected closing, compared against what the probe measured, per tank. Variances raise an investigation alert — never an automatic theft claim. |
 | **Alerts** | Configurable rules (low %, critical %, overfill %, offline timeout, anomaly sensitivity, water, temperature) with a full **Active → Acknowledged → Resolved** lifecycle, notes and assignment. |
 | **Fuel usage** | A tank's **Usage** tab shows how much fuel left the tank for **Today**, **This Week**, **This Month** or a **Custom Date** period. One period selector drives the totals (total, average per day, highest and lowest day, days represented) and an hourly / daily / weekly bar chart, counted from recorded consumption movements in the tank's own time zone. |
-| **Fuel Usage Replay** | Play / pause / speed / timeline scrubbing over historical readings for any tank. |
+| **Fuel Usage Replay** | Play / pause / speed / timeline scrubbing over historical readings for any tank, over the same **Today / This Week / This Month / Custom Date** period as the Usage tab. |
 | **Fleet** | Vehicles, tracker registration and driver assignment. The map plots station coordinates; vehicle home stations are static references, not live GPS fixes. |
 | **Reports** | On-demand daily / weekly / monthly / custom reports across ten categories, exported as PDF, Excel or CSV. Saved schedules are not executed automatically. |
 | **Administration** | Multi-tenant organizations, five operating roles plus a platform super admin, RBAC enforced at the API level, integrations, audit log and settings. |

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { fetchApiData, isAbortError } from "@/lib/api-fetch";
 import type { UsageRangeRequest, UsageReport } from "@/lib/tank-usage";
 
 export type TankUsageState =
@@ -9,28 +10,22 @@ export type TankUsageState =
   | { status: "ready"; report: UsageReport }
   | { status: "error"; message: string };
 
-async function fetchUsage(tankId: string, request: UsageRangeRequest, signal: AbortSignal): Promise<UsageReport> {
+function usageUrl(tankId: string, request: UsageRangeRequest): string {
   const params = new URLSearchParams({ range: request.preset });
   if (request.preset === "custom") {
     params.set("start", request.start ?? "");
     params.set("end", request.end ?? "");
   }
-  let response: Response;
-  try {
-    response = await fetch(`/api/tanks/${tankId}/usage?${params.toString()}`, { signal });
-  } catch (error) {
-    if (signal.aborted) throw error;
-    throw new Error("Could not reach the server. Please try again.");
-  }
-  const payload = await response.json().catch(() => null);
-  if (!payload?.ok) throw new Error(payload?.error?.message ?? "Could not load fuel usage. Please try again.");
-  return payload.data as UsageReport;
+  return `/api/tanks/${encodeURIComponent(tankId)}/usage?${params.toString()}`;
 }
 
 /**
  * Loads one usage report for the chosen period. The chart and the summary
  * metrics both read this single result, so they always describe the same period.
- * A request is cancelled when the period changes, and `null` means "nothing valid to load".
+ *
+ * A request is cancelled when the period changes, and `null` means "nothing valid
+ * to load". Every outcome — data, no data, a failure, a server that never answers
+ * — ends in a settled state, so the view is never left loading indefinitely.
  */
 export function useTankUsage(tankId: string, request: UsageRangeRequest | null) {
   const [state, setState] = useState<TankUsageState>({ status: request ? "loading" : "idle" });
@@ -40,18 +35,18 @@ export function useTankUsage(tankId: string, request: UsageRangeRequest | null) 
   const end = request?.end ?? null;
 
   useEffect(() => {
-    if (!preset) {
+    if (!tankId || !preset) {
       setState({ status: "idle" });
       return;
     }
     const controller = new AbortController();
     setState({ status: "loading" });
-    fetchUsage(tankId, { preset, start, end }, controller.signal)
+    fetchApiData<UsageReport>(usageUrl(tankId, { preset, start, end }), { signal: controller.signal })
       .then((report) => {
         if (!controller.signal.aborted) setState({ status: "ready", report });
       })
       .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || isAbortError(error)) return;
         setState({ status: "error", message: error instanceof Error ? error.message : "Could not load fuel usage." });
       });
     return () => controller.abort();

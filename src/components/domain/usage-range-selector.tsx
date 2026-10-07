@@ -1,14 +1,46 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { Field, Input } from "@/components/ui/form";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { USAGE_PRESETS, type UsagePreset } from "@/lib/tank-usage";
+import {
+  USAGE_PRESETS,
+  resolveUsageRange,
+  todayDateKey,
+  type UsagePreset,
+  type UsageRangeResult,
+} from "@/lib/tank-usage";
 
 export interface UsageSelection {
   preset: UsagePreset;
   /** Local `YYYY-MM-DD`; kept while another preset is chosen so Custom Date remembers it. */
   start: string;
   end: string;
+}
+
+/**
+ * The period state shared by the views that are driven by one period: the
+ * selection itself, today in the tank's time zone (the latest selectable day),
+ * and the resolved range. Resolution happens here, once, so a panel never sends
+ * an undefined or impossible period to the API.
+ */
+export function useUsageSelection(timeZone: string): {
+  selection: UsageSelection;
+  setSelection: (next: UsageSelection) => void;
+  today: string;
+  resolved: UsageRangeResult;
+} {
+  const today = useMemo(() => todayDateKey(new Date(), timeZone), [timeZone]);
+  const [selection, setSelection] = useState<UsageSelection>(() => ({
+    preset: "today",
+    start: `${today.slice(0, 7)}-01`,
+    end: today,
+  }));
+  const resolved = useMemo(
+    () => resolveUsageRange({ preset: selection.preset, start: selection.start, end: selection.end }, new Date(), timeZone),
+    [selection, timeZone],
+  );
+  return { selection, setSelection, today, resolved };
 }
 
 /**
